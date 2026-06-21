@@ -52,11 +52,19 @@ What we are reproducing (from the Unity project `powerofpong`):
 - ⬜ **Exit criteria — boots on PS3 / RPCS3 to the test screen:** still to be confirmed
   on hardware/emulator (cannot be verified from the build host).
 
-### Phase 2 — Input ⬜
-- DualShock3 via the PSL1GHT pad API (`ioPadInit`, `ioPadGetData`).
-- Map sticks/buttons to the actions in `SimpleController.cs` (move, charge, blast,
-  melee, pause). Replaces Unity CrossPlatformInput + the CNControls plugin.
-- **Exit criteria:** on-screen readout reacts to the pad.
+### Phase 2 — Input ✅
+- ✅ DualShock3 via the PSL1GHT pad API (`ioPadInit`, `ioPadGetData`) with an analog
+  deadzone and edge-detected actions.
+- ✅ Control map ported from `SimpleController.cs` / `BalanceOfPower.cs`: left stick /
+  D-pad move the P1 fighter (clamped to the arena box), Cross = charge, Circle = blast,
+  Square = melee, Start = pause, Select+Start = quit. Replaces Unity CrossPlatformInput
+  + the CNControls plugin.
+- ✅ On-screen readout: the P1 fighter slides with input and MOVE/CHARGE/BLAST/MELEE/
+  PAUSE chips light up as their buttons are used.
+- ⬜ **Exit criteria — readout reacts to the pad on hardware:** confirm on PS3/RPCS3
+  (builds green; on-console behavior to be verified by playtest).
+- Note: world-space bounds (X ±12, Z ±6) and ki-scaled move speed are approximated in
+  screen space here; the faithful port lands with the arena (Phase 3) and ki (Phase 5).
 
 ### Phase 3 — Arena & rendering ⬜
 - Draw the arena floor/background and two fighters (start as 2D sprites / billboards;
