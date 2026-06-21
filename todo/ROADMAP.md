@@ -84,11 +84,23 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: `curKi` in the speed formula is a fixed placeholder until Phase 5; Y-axis
   movement (the `±1` clamp) is unused for now (fighters stay grounded at y=0).
 
-### Phase 4 — Core combat ⬜
-- Port `BalanceOfPower.cs`: health & ki state, paddle-collision damage, win/loss,
-  best-of-three round progression.
-- Replace Unity Rigidbody/Collider with hand-rolled AABB / sphere overlap tests.
-- **Exit criteria:** two fighters can deplete each other's health; a round ends.
+### Phase 4 — Core combat ✅
+- ✅ Ported `BalanceOfPower.cs` as a **power tug-of-war**: a single balance bar
+  starts at 50; a melee hit TRANSFERS power (attacker +1.5·levelPower, opponent −the
+  same) and grants the attacker +7 ki. Fill the bar to 100 to win the round.
+- ✅ Per-fighter **ki state**: charges while holding the charge button (faster when
+  standing still: +25/s vs +10/s), drains −3/s otherwise (`chargeKi()`).
+- ✅ **Hand-rolled collision** (XZ center distance ≤ contact radius) — no Rigidbody;
+  melee is edge-triggered, cooldown-gated, and knocks the opponent back.
+- ✅ **Round/match flow**: round ends when the bar hits a cap; first to 3 round wins
+  takes the match; round-over and match-over banners; Start rematches.
+- ✅ Both fighters can fight (P1 = Cross charge / Square melee, P2 = L1 charge / R1
+  melee), so they can deplete each other and end a round. Fight HUD: balance bar +
+  two ki bars + score.
+- ⬜ **Exit criteria — fighters deplete each other and a round ends, on hardware:**
+  confirm on PS3/RPCS3 (builds green; on-console feel to be verified by playtest).
+- Note: ki blasts (Projectile.cs) and the single battle/tournament/mission mode split
+  are later (Phases 5 / 9); this runs one continuous first-to-3 match.
 
 ### Phase 5 — Ki system ⬜
 - Port `Projectile.cs`: hold-to-charge, release to fire at 3 power levels
