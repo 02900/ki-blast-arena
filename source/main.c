@@ -4,25 +4,28 @@
  * PS3 homebrew port of "Power of Pong": a Dragon Ball-style 1v1 arena fighter
  * mixing pong/paddle mechanics with charged ki energy blasts.
  *
- * Phase 2 (input): DualShock3 via the PSL1GHT pad API. The player-1 fighter
- * moves with the left stick / D-pad, clamped to the arena bounds, and an
- * on-screen readout reacts to the action buttons. Control map ported from the
- * Unity originals (SimpleController.cs / BalanceOfPower.cs):
+ * Phase 3 (arena & rendering): the playfield is now a real world-space arena
+ * drawn in perspective. Fighters live at world coordinates (x, 0, z) and are
+ * clamped to the original PongPaddle.cs bounds (X +/-12, Z +/-6); they render as
+ * depth-scaled billboards over a projected floor grid. A small software pinhole
+ * projection (camera lookAt + perspective divide) feeds Tiny3D's 2D primitives,
+ * so the camera is fully deterministic; true Tiny3D meshes are a later upgrade.
  *
- *   Left stick / D-pad ... move (Horizontal/Vertical axes)
- *   Cross (X), hold ...... charge ki      ("X PO"  GetButton)
- *   Circle (O) ........... launch ki blast ("O PO" GetButtonDown)
- *   Square ............... melee attack    ("4 PO" GetButtonDown)
- *   Start ................ pause (toggle)
+ * Controls (ported from SimpleController.cs / BalanceOfPower.cs):
+ *   Left stick / D-pad ... move fighter 1 (Horizontal -> world X, Vertical -> Z)
+ *   Right stick .......... move fighter 2 (local 2P placeholder until the CPU AI)
+ *   Cross (X), hold ...... charge ki  (aura)    Circle (O) ... ki blast
+ *   Square ............... melee                Start ........ pause
  *   Select + Start ....... quit to XMB
  *
- * Movement/combat are only visualized here (chips light up, fighter slides).
- * The real ki/health/damage simulation lands in Phases 4-5 (todo/ROADMAP.md).
+ * Movement uses SimpleController's speed formula; curKi is a fixed placeholder
+ * until the ki system goes live in Phase 5. No damage simulation yet.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include <ppu-types.h>
 #include <io/pad.h>
@@ -44,58 +47,109 @@
 #define COLOR_GRAY    0xA0A0A0FF
 #define COLOR_ORANGE  0xFF8800FF
 #define COLOR_GREEN   0x46D45AFF
-#define COLOR_P1      0x3FA9F5FF   /* player 1 fighter (blue) */
-#define COLOR_P2      0xF5503FFF   /* player 2 / CPU fighter (red) */
-
-#define SKY_CLEAR     0xff0E1A2E   /* tiny3d_Clear wants 0xAARRGGBB */
-#define ARENA_FILL    0x14243CFF
-#define ARENA_BORDER  0x3A5A86FF
+#define COLOR_P1      0x3FA9F5FF   /* fighter 1 (blue) */
+#define COLOR_P2      0xF5503FFF   /* fighter 2 (red)  */
+#define COLOR_SHADOW  0x00000080
 #define CHIP_OFF      0x1E2C3CFF
 #define CHIP_BORDER   0x405068FF
 
-/* Arena playfield rectangle (screen space). The original world bounds are
- * X +/-12, Z +/-6 (PongPaddle.cs); here we clamp the fighter to this box and
- * map the real world-space arena in Phase 3. */
-#define AR_LEFT    80
-#define AR_TOP     110
-#define AR_RIGHT   (SCREEN_WIDTH - 80)
-#define AR_BOTTOM  382
-#define AR_INSET   10
+#define SKY_CLEAR     0xff0E1A2E   /* tiny3d_Clear wants 0xAARRGGBB */
 
-#define PAD_W  16
-#define PAD_H  84
-#define MOVE_SPEED   4.0f   /* px/frame; ki-scaled speed comes with the ki system */
-#define STICK_DEAD   32     /* analog deadzone (0..127 from center) */
-#define FLASH_FRAMES 12     /* how long a tap lights its chip */
+/* Arena world bounds (PongPaddle.cs: X +/-12, Z +/-6). */
+#define ARENA_X   12.0f
+#define ARENA_Z   6.0f
+#define FIGHTER_W 2.4f
+#define FIGHTER_H 3.4f
+
+/* Movement model (SimpleController.cs). levelPower 1..10; curKi is a placeholder
+ * until Phase 5 wires the real ki bar. moveSpeed = 0.2 + levelPower/50, then the
+ * per-step translate scales up with current ki. */
+#define LEVEL_POWER  5.0f
+#define PLACEHOLDER_KI 35.0f
+#define STICK_DEAD   32
+#define FLASH_FRAMES 12
+
+/* Software camera (deterministic pinhole; no Tiny3D matrices). */
+#define FOCAL  520.0f
+#define CAM_CX (SCREEN_WIDTH / 2.0f)
+#define CAM_CY (SCREEN_HEIGHT / 2.0f)
 
 static int running = 1;
 static padInfo pad_info;
 static padData pad_data;
 static u32 *ttf_texture = NULL;
 
-/* Fighter + action state driven by the pad. */
-static float p1x, p1y;          /* player-1 fighter top-left (screen space) */
-static int moving = 0;          /* stick/d-pad deflected this frame */
-static int charging = 0;        /* Cross held */
-static int blast_flash = 0;     /* Circle tapped (counts down) */
-static int melee_flash = 0;     /* Square tapped (counts down) */
-static int paused = 0;          /* Start toggles */
+/* Camera basis (right, up, forward) + eye, computed once. */
+static float cam_eye[3]   = { 0.0f, 9.0f, -18.0f };
+static float cam_target[3]= { 0.0f, 1.5f,   0.0f };
+static float cam_r[3], cam_u[3], cam_f[3];
+
+/* Two fighters at world (x, 0, z). */
+static float f1x = -9.0f, f1z = 0.0f;
+static float f2x =  9.0f, f2z = 0.0f;
+
+/* P1 action readout state. */
+static int moving = 0, charging = 0, blast_flash = 0, melee_flash = 0, paused = 0;
 
 static void sys_callback(u64 status, u64 param, void *userdata)
 {
-	(void)param;
-	(void)userdata;
+	(void)param; (void)userdata;
 	if (status == SYSUTIL_EXIT_GAME)
 		running = 0;
 }
 
+/* --- tiny vector helpers -------------------------------------------------- */
+static void v_sub(const float a[3], const float b[3], float o[3])
+{
+	o[0] = a[0] - b[0]; o[1] = a[1] - b[1]; o[2] = a[2] - b[2];
+}
+static float v_dot(const float a[3], const float b[3])
+{
+	return a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+}
+static void v_cross(const float a[3], const float b[3], float o[3])
+{
+	o[0] = a[1]*b[2] - a[2]*b[1];
+	o[1] = a[2]*b[0] - a[0]*b[2];
+	o[2] = a[0]*b[1] - a[1]*b[0];
+}
+static void v_norm(float v[3])
+{
+	float len = sqrtf(v_dot(v, v));
+	if (len > 1e-6f) { v[0]/=len; v[1]/=len; v[2]/=len; }
+}
+
+/* Build the right/up/forward basis for a lookAt camera (up = +Y). */
+static void camera_setup(void)
+{
+	const float up[3] = { 0.0f, 1.0f, 0.0f };
+	v_sub(cam_target, cam_eye, cam_f); v_norm(cam_f);   /* forward */
+	v_cross(up, cam_f, cam_r);         v_norm(cam_r);   /* right   */
+	v_cross(cam_f, cam_r, cam_u);                       /* true up */
+}
+
+/* Project a world point to screen. Returns 0 if behind the camera; otherwise
+ * fills *sx,*sy and *scale (pixels per world unit at that depth). */
+static int project(float wx, float wy, float wz, float *sx, float *sy, float *scale)
+{
+	const float p[3] = { wx, wy, wz };
+	float d[3];
+	v_sub(p, cam_eye, d);
+	float vz = v_dot(d, cam_f);
+	if (vz < 0.05f) return 0;
+	float vx = v_dot(d, cam_r);
+	float vy = v_dot(d, cam_u);
+	*sx = CAM_CX + FOCAL * vx / vz;
+	*sy = CAM_CY - FOCAL * vy / vz;
+	*scale = FOCAL / vz;
+	return 1;
+}
+
 static void init_fonts(void)
 {
-	/* PS3 system fonts shipped in /dev_flash (present on real consoles + RPCS3). */
 	TTFLoadFont(0, "/dev_flash/data/font/SCE-PS3-SR-R-LATIN2.TTF", NULL, 0);
 	TTFLoadFont(1, "/dev_flash/data/font/SCE-PS3-DH-R-CGB.TTF", NULL, 0);
 	TTFLoadFont(2, "/dev_flash/data/font/SCE-PS3-SR-R-JPN.TTF", NULL, 0);
-
 	ttf_texture = (u32 *)init_ttf_table((u16 *)ya2d_texturePointer);
 	ya2d_texturePointer = ttf_texture;
 }
@@ -106,47 +160,45 @@ static void init_screen(void)
 	ya2d_init();
 	init_fonts();
 	set_ttf_window(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0);
-	/* Clay UI backend is wired up (Phase 1) so menus/HUD can build on it later. */
 	clay_backend_init(SCREEN_WIDTH, SCREEN_HEIGHT);
 }
 
-/* Map an analog axis byte (0..255, center 128) to -1..1 with a deadzone. */
+/* --- input ---------------------------------------------------------------- */
 static float axis(u8 v)
 {
 	int d = (int)v - 128;
-	if (d > -STICK_DEAD && d < STICK_DEAD)
-		return 0.0f;
+	if (d > -STICK_DEAD && d < STICK_DEAD) return 0.0f;
 	return (float)d / 127.0f;
 }
-
 static void clampf(float *v, float lo, float hi)
 {
-	if (*v < lo) *v = lo;
-	else if (*v > hi) *v = hi;
+	if (*v < lo) *v = lo; else if (*v > hi) *v = hi;
 }
 
-/* Read the pad and update fighter position + action flags.
- * Returns 0 to request quit (Select+Start). */
+/* Apply SimpleController's translation with PongPaddle's clamp. */
+static void move_fighter(float *x, float *z, float mx, float mz)
+{
+	const float moveSpeed = 0.2f + LEVEL_POWER / 50.0f;
+	const float step = moveSpeed + (moveSpeed * 0.5f * PLACEHOLDER_KI / 100.0f);
+	*x += mx * step;
+	*z += mz * step;
+	clampf(x, -ARENA_X, ARENA_X);
+	clampf(z, -ARENA_Z, ARENA_Z);
+}
+
+/* Returns 0 to request quit (Select+Start). */
 static int update_input(void)
 {
-	static u32 prev = 0;   /* for edge-detected actions */
+	static u32 prev = 0;
 	u32 cur = 0;
 	int connected;
 
 	ioPadGetInfo(&pad_info);
 	connected = pad_info.status[0];
-	if (connected)
-		ioPadGetData(0, &pad_data);
+	if (connected) ioPadGetData(0, &pad_data);
+	if (!connected) { moving = charging = 0; prev = 0; return 1; }
 
-	if (!connected) {
-		moving = charging = 0;
-		prev = 0;
-		return 1;
-	}
-
-	/* Quit combo takes priority so it never doubles as a pause toggle. */
-	if (pad_data.BTN_SELECT && pad_data.BTN_START)
-		return 0;
+	if (pad_data.BTN_SELECT && pad_data.BTN_START) return 0;
 
 	cur = (pad_data.BTN_CIRCLE ? 1u : 0u)
 	    | (pad_data.BTN_SQUARE ? 2u : 0u)
@@ -155,41 +207,41 @@ static int update_input(void)
 	prev = cur;
 
 	if (pressed & 4u) paused = !paused;
-
-	/* Action readout (only while running). */
 	charging = (!paused && pad_data.BTN_CROSS) ? 1 : 0;
 	if (!paused && (pressed & 1u)) blast_flash = FLASH_FRAMES;
 	if (!paused && (pressed & 2u)) melee_flash = FLASH_FRAMES;
 	if (blast_flash > 0) blast_flash--;
 	if (melee_flash > 0) melee_flash--;
 
-	/* Movement: left stick + D-pad, clamped to the arena box. */
-	float mx = 0.0f, my = 0.0f;
-	if (!paused) {
-		/* Both axes exactly 0 means "no analog data yet" (digital pad / not
-		 * read), NOT full up-left -> ignore to avoid phantom drift. */
-		if (!(pad_data.ANA_L_H == 0 && pad_data.ANA_L_V == 0)) {
-			mx = axis(pad_data.ANA_L_H);
-			my = axis(pad_data.ANA_L_V);
-		}
-		if (pad_data.BTN_LEFT)  mx -= 1.0f;
-		if (pad_data.BTN_RIGHT) mx += 1.0f;
-		if (pad_data.BTN_UP)    my -= 1.0f;
-		if (pad_data.BTN_DOWN)  my += 1.0f;
-		clampf(&mx, -1.0f, 1.0f);
-		clampf(&my, -1.0f, 1.0f);
-	}
-	moving = (mx != 0.0f || my != 0.0f);
+	if (paused) { moving = 0; return 1; }
 
-	p1x += mx * MOVE_SPEED;
-	p1y += my * MOVE_SPEED;
-	clampf(&p1x, AR_LEFT + AR_INSET, AR_RIGHT - AR_INSET - PAD_W);
-	clampf(&p1y, AR_TOP + AR_INSET, AR_BOTTOM - AR_INSET - PAD_H);
+	/* Fighter 1: left stick + D-pad. Both axes exactly 0 = no analog data. */
+	float m1x = 0.0f, m1z = 0.0f;
+	if (!(pad_data.ANA_L_H == 0 && pad_data.ANA_L_V == 0)) {
+		m1x = axis(pad_data.ANA_L_H);
+		m1z = -axis(pad_data.ANA_L_V);   /* stick up -> +Z (away) */
+	}
+	if (pad_data.BTN_LEFT)  m1x -= 1.0f;
+	if (pad_data.BTN_RIGHT) m1x += 1.0f;
+	if (pad_data.BTN_UP)    m1z += 1.0f;
+	if (pad_data.BTN_DOWN)  m1z -= 1.0f;
+	clampf(&m1x, -1.0f, 1.0f);
+	clampf(&m1z, -1.0f, 1.0f);
+	moving = (m1x != 0.0f || m1z != 0.0f);
+	move_fighter(&f1x, &f1z, m1x, m1z);
+
+	/* Fighter 2: right stick (local 2P placeholder until the CPU AI, Phase 7). */
+	float m2x = 0.0f, m2z = 0.0f;
+	if (!(pad_data.ANA_R_H == 0 && pad_data.ANA_R_V == 0)) {
+		m2x = axis(pad_data.ANA_R_H);
+		m2z = -axis(pad_data.ANA_R_V);
+	}
+	move_fighter(&f2x, &f2z, m2x, m2z);
 
 	return 1;
 }
 
-/* Standard 2D frame setup (clear + alpha/blend + Project2D). */
+/* --- 3D arena rendering (software-projected, drawn with Tiny3D 2D prims) --- */
 static void begin_2d_frame(void)
 {
 	tiny3d_Clear(SKY_CLEAR, TINY3D_CLEAR_ALL);
@@ -202,73 +254,141 @@ static void begin_2d_frame(void)
 	reset_ttf_frame();
 }
 
-static void draw_arena(void)
+/* A projected quad (4 world ground points) as a single filled polygon. */
+static void floor_quad(void)
 {
-	const int w = AR_RIGHT - AR_LEFT;
-	const int h = AR_BOTTOM - AR_TOP;
+	float sx[4], sy[4], sc;
+	int ok = 1;
+	ok &= project(-ARENA_X, 0, -ARENA_Z, &sx[0], &sy[0], &sc);
+	ok &= project( ARENA_X, 0, -ARENA_Z, &sx[1], &sy[1], &sc);
+	ok &= project( ARENA_X, 0,  ARENA_Z, &sx[2], &sy[2], &sc);
+	ok &= project(-ARENA_X, 0,  ARENA_Z, &sx[3], &sy[3], &sc);
+	if (!ok) return;
 
-	ya2d_drawFillRectZ(AR_LEFT, AR_TOP, 0, w, h, ARENA_FILL);
-	ya2d_drawRectZ(AR_LEFT, AR_TOP, 0, w, h, ARENA_BORDER);
-	ya2d_drawFillRectZ(SCREEN_WIDTH / 2 - 1, AR_TOP + 8, 0, 2, h - 16, ARENA_BORDER);
-
-	/* Player 1 (moves with the pad); a charge "aura" outline when holding Cross. */
-	ya2d_drawFillRectZ((int)p1x, (int)p1y, 0, PAD_W, PAD_H, COLOR_P1);
-	if (charging) {
-		ya2d_drawRectZ((int)p1x - 3, (int)p1y - 3, 0, PAD_W + 6, PAD_H + 6, COLOR_ORANGE);
-		ya2d_drawRectZ((int)p1x - 2, (int)p1y - 2, 0, PAD_W + 4, PAD_H + 4, COLOR_ORANGE);
-	}
-
-	/* Player 2 / CPU placeholder, parked at the right boundary (static for now). */
-	const int p2x = AR_RIGHT - AR_INSET - 24 - PAD_W;
-	const int p2y = AR_TOP + (h - PAD_H) / 2;
-	ya2d_drawFillRectZ(p2x, p2y, 0, PAD_W, PAD_H, COLOR_P2);
+	/* Brighter at the front (near) edge, darker at the back, for depth. */
+	const u32 near_c = 0x1C3050FF, far_c = 0x0E1C30FF;
+	tiny3d_SetPolygon(TINY3D_QUADS);
+	tiny3d_VertexPos(sx[0], sy[0], 0); tiny3d_VertexColor(near_c);
+	tiny3d_VertexPos(sx[1], sy[1], 0); tiny3d_VertexColor(near_c);
+	tiny3d_VertexPos(sx[2], sy[2], 0); tiny3d_VertexColor(far_c);
+	tiny3d_VertexPos(sx[3], sy[3], 0); tiny3d_VertexColor(far_c);
+	tiny3d_End();
 }
 
-/* A labelled status "chip" that lights up when its action is active. */
+static void floor_grid(void)
+{
+	float sx, sy, sc, ax, ay, bx, by;
+	const u32 line = 0x35587FFF, mid = 0x6FA0D0FF;
+
+	tiny3d_SetPolygon(TINY3D_LINES);
+	/* Lines parallel to Z (constant X). */
+	for (int i = -12; i <= 12; i += 3) {
+		u32 c = (i == 0) ? mid : line;
+		if (!project((float)i, 0, -ARENA_Z, &ax, &ay, &sc)) continue;
+		if (!project((float)i, 0,  ARENA_Z, &bx, &by, &sc)) continue;
+		tiny3d_VertexPos(ax, ay, 0); tiny3d_VertexColor(c);
+		tiny3d_VertexPos(bx, by, 0); tiny3d_VertexColor(c);
+	}
+	/* Lines parallel to X (constant Z). */
+	for (int j = -6; j <= 6; j += 3) {
+		u32 c = (j == 0) ? mid : line;
+		if (!project(-ARENA_X, 0, (float)j, &ax, &ay, &sc)) continue;
+		if (!project( ARENA_X, 0, (float)j, &bx, &by, &sc)) continue;
+		tiny3d_VertexPos(ax, ay, 0); tiny3d_VertexColor(c);
+		tiny3d_VertexPos(bx, by, 0); tiny3d_VertexColor(c);
+	}
+	(void)sx; (void)sy;
+	tiny3d_End();
+}
+
+/* Depth-scaled billboard standing on the floor at (wx, wz). */
+static void draw_fighter(float wx, float wz, u32 color, int aura)
+{
+	float bx, by, sc;
+	if (!project(wx, 0.0f, wz, &bx, &by, &sc)) return;
+
+	float w = FIGHTER_W * sc;
+	float h = FIGHTER_H * sc;
+	int rx = (int)(bx - w * 0.5f);
+	int ry = (int)(by - h);
+	int rw = (int)w;
+	int rh = (int)h;
+
+	/* Floor shadow (a flattened ellipse approximated by a thin rect). */
+	int shw = (int)(w * 1.05f);
+	ya2d_drawFillRectZ((int)(bx - shw * 0.5f), (int)by - 3, 0, shw, 6, COLOR_SHADOW);
+
+	if (aura) {
+		ya2d_drawRectZ(rx - 3, ry - 3, 0, rw + 6, rh + 6, COLOR_ORANGE);
+		ya2d_drawRectZ(rx - 2, ry - 2, 0, rw + 4, rh + 4, COLOR_ORANGE);
+	}
+	ya2d_drawFillRectZ(rx, ry, 0, rw, rh, color);
+	ya2d_drawRectZ(rx, ry, 0, rw, rh, COLOR_WHITE);
+	/* A "head" cap so the billboard reads as a fighter, not a slab. */
+	int hw = rw / 2;
+	ya2d_drawFillRectZ((int)(bx - hw * 0.5f), ry - hw, 0, hw, hw, color);
+}
+
+static void draw_arena(void)
+{
+	floor_quad();
+	floor_grid();
+
+	/* Painter's algorithm: draw the farther fighter first. Depth = forward dot. */
+	float d1[3], d2[3], p1[3] = { f1x, 0, f1z }, p2[3] = { f2x, 0, f2z };
+	v_sub(p1, cam_eye, d1);
+	v_sub(p2, cam_eye, d2);
+	float vz1 = v_dot(d1, cam_f), vz2 = v_dot(d2, cam_f);
+
+	if (vz1 >= vz2) {
+		draw_fighter(f1x, f1z, COLOR_P1, charging);
+		draw_fighter(f2x, f2z, COLOR_P2, 0);
+	} else {
+		draw_fighter(f2x, f2z, COLOR_P2, 0);
+		draw_fighter(f1x, f1z, COLOR_P1, charging);
+	}
+}
+
+/* --- HUD ------------------------------------------------------------------ */
 static void draw_chip(int x, int y, int w, const char *label, int active, u32 on_color)
 {
 	u32 fill = active ? on_color : CHIP_OFF;
-	ya2d_drawFillRectZ(x, y, 0, w, 30, fill);
-	ya2d_drawRectZ(x, y, 0, w, 30, active ? on_color : CHIP_BORDER);
-	display_ttf_string(x + 10, y + 7, label, active ? 0x000000FF : COLOR_GRAY, 0, 12, 18);
+	ya2d_drawFillRectZ(x, y, 0, w, 28, fill);
+	ya2d_drawRectZ(x, y, 0, w, 28, active ? on_color : CHIP_BORDER);
+	display_ttf_string(x + 9, y + 6, label, active ? 0x000000FF : COLOR_GRAY, 0, 11, 17);
 }
 
 static void draw_hud(void)
 {
-	display_ttf_string(80, 28, "KI BLAST ARENA", COLOR_ORANGE, 0, 26, 36);
-	display_ttf_string(82, 70, "Phase 2 - input test (move with stick / D-pad)", COLOR_GRAY, 0, 13, 18);
+	display_ttf_string(28, 24, "KI BLAST ARENA", COLOR_ORANGE, 0, 24, 34);
+	display_ttf_string(30, 62, "Phase 3 - world-space arena (X +/-12, Z +/-6)", COLOR_GRAY, 0, 12, 17);
 
-	const int y = AR_BOTTOM + 14;
-	int x = AR_LEFT;
-	draw_chip(x, y, 86, "MOVE",   moving,           COLOR_P1);     x += 96;
-	draw_chip(x, y, 100, "CHARGE", charging,         COLOR_ORANGE); x += 110;
-	draw_chip(x, y, 90, "BLAST",  blast_flash > 0,  COLOR_CYAN);   x += 100;
-	draw_chip(x, y, 90, "MELEE",  melee_flash > 0,  COLOR_GREEN);  x += 100;
-	draw_chip(x, y, 90, "PAUSE",  paused,           COLOR_WHITE);
+	const int y = SCREEN_HEIGHT - 64;
+	int x = 28;
+	draw_chip(x, y, 80, "MOVE",   moving,          COLOR_P1);     x += 90;
+	draw_chip(x, y, 94, "CHARGE", charging,        COLOR_ORANGE); x += 104;
+	draw_chip(x, y, 84, "BLAST",  blast_flash > 0, COLOR_CYAN);   x += 94;
+	draw_chip(x, y, 84, "MELEE",  melee_flash > 0, COLOR_GREEN);  x += 94;
+	draw_chip(x, y, 84, "PAUSE",  paused,          COLOR_WHITE);
 
-	display_ttf_string(80, SCREEN_HEIGHT - 34,
-		"Cross: charge   Circle: blast   Square: melee   Start: pause   Select+Start: quit",
-		COLOR_GRAY, 0, 12, 16);
+	display_ttf_string(28, SCREEN_HEIGHT - 28,
+		"L-stick: P1   R-stick: P2   X: charge   O: blast   Sq: melee   Start: pause   Sel+Start: quit",
+		COLOR_GRAY, 0, 11, 15);
 
 	if (paused)
-		display_ttf_string(SCREEN_WIDTH / 2 - 60, AR_TOP + (AR_BOTTOM - AR_TOP) / 2 - 18,
-			"PAUSED", COLOR_WHITE, 0, 28, 40);
+		display_ttf_string(SCREEN_WIDTH / 2 - 55, 250, "PAUSED", COLOR_WHITE, 0, 26, 38);
 }
 
 int main(int argc, char *argv[])
 {
-	(void)argc;
-	(void)argv;
+	(void)argc; (void)argv;
 
-	printf("\n=== Ki Blast Arena (Phase 2 input test) ===\n");
+	printf("\n=== Ki Blast Arena (Phase 3 arena) ===\n");
 
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
 	init_screen();
 	ioPadInit(7);
-
-	/* Start the fighter near the left boundary, vertically centered. */
-	p1x = AR_LEFT + AR_INSET + 24;
-	p1y = AR_TOP + ((AR_BOTTOM - AR_TOP) - PAD_H) / 2;
+	camera_setup();
 
 	while (running) {
 		if (!update_input())

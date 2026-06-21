@@ -66,12 +66,22 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: world-space bounds (X ±12, Z ±6) and ki-scaled move speed are approximated in
   screen space here; the faithful port lands with the arena (Phase 3) and ki (Phase 5).
 
-### Phase 3 — Arena & rendering ⬜
-- Draw the arena floor/background and two fighters (start as 2D sprites / billboards;
-  upgrade to simple meshes later).
-- Bounded 3D movement; port `PongPaddle.cs` clamps (X ±12, Z ±6, Y ±1) and
-  `SimpleController.cs` translation (speed scaling by ki level).
-- **Exit criteria:** two movable fighters inside the arena bounds.
+### Phase 3 — Arena & rendering ✅
+- ✅ Real world-space arena drawn in perspective: a projected floor quad + grid
+  spanning the `PongPaddle.cs` bounds (X ±12, Z ±6), with depth shading.
+- ✅ Two fighters as depth-scaled **billboards** (with floor shadow + head cap),
+  painter's-algorithm sorted by camera depth. (Tiny3D mesh upgrade is later.)
+- ✅ Bounded world-space movement: both fighters move at world (x, 0, z), clamped to
+  X ±12 / Z ±6; F1 = left stick / D-pad, F2 = right stick (local-2P placeholder until
+  the CPU AI in Phase 7). Translation uses `SimpleController.cs`'s speed formula
+  (`moveSpeed = 0.2 + levelPower/50`, ki-scaled).
+- ✅ Renderer: a small **deterministic software pinhole projection** (lookAt camera +
+  perspective divide) feeding Tiny3D's 2D primitives — chosen over Tiny3D's matrix
+  pipeline so the camera is fully predictable without on-device trial-and-error.
+- ⬜ **Exit criteria — two movable fighters inside the bounds on hardware:** confirm on
+  PS3/RPCS3 (builds green; on-console look/feel to be verified by playtest).
+- Note: `curKi` in the speed formula is a fixed placeholder until Phase 5; Y-axis
+  movement (the `±1` clamp) is unused for now (fighters stay grounded at y=0).
 
 ### Phase 4 — Core combat ⬜
 - Port `BalanceOfPower.cs`: health & ki state, paddle-collision damage, win/loss,
