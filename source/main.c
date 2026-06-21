@@ -300,8 +300,13 @@ static int update_game(void)
 
 	ioPadGetInfo(&pad_info);
 	for (int i = 0; i < 2; i++) {
-		conn[i] = pad_info.status[i];
-		if (conn[i]) ioPadGetData(i, &pd[i]);
+		/* A port only counts as an active player when it reports connected AND
+		 * returns a valid data packet (len > 0). Without the len/return check, a
+		 * phantom port (e.g. an unconfigured pad slot on RPCS3) leaves this stack
+		 * struct full of garbage and the fighter flails into a corner. */
+		memset(&pd[i], 0, sizeof(pd[i]));
+		if (pad_info.status[i] && ioPadGetData(i, &pd[i]) == 0 && pd[i].len > 0)
+			conn[i] = 1;
 	}
 	p1_conn = conn[0];
 	p2_conn = conn[1];
