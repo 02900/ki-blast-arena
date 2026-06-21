@@ -300,12 +300,14 @@ static int update_game(void)
 
 	ioPadGetInfo(&pad_info);
 	for (int i = 0; i < 2; i++) {
-		/* A port only counts as an active player when it reports connected AND
-		 * returns a valid data packet (len > 0). Without the len/return check, a
-		 * phantom port (e.g. an unconfigured pad slot on RPCS3) leaves this stack
-		 * struct full of garbage and the fighter flails into a corner. */
+		/* Zero the struct BEFORE reading: ioPadGetData leaves the button/analog
+		 * fields untouched on an idle frame (it sets len = 0 when there is no new
+		 * data), so an uninitialized struct would feed stack garbage and make the
+		 * fighter flail. Zeroed + unchanged == a neutral frame, which is correct.
+		 * Connection is status[i] + a successful read; do NOT gate on len > 0, or a
+		 * motionless controller would read as disconnected. */
 		memset(&pd[i], 0, sizeof(pd[i]));
-		if (pad_info.status[i] && ioPadGetData(i, &pd[i]) == 0 && pd[i].len > 0)
+		if (pad_info.status[i] && ioPadGetData(i, &pd[i]) == 0)
 			conn[i] = 1;
 	}
 	p1_conn = conn[0];
