@@ -12,10 +12,12 @@
  * when standing still) and drains slowly otherwise. Collisions are hand-rolled
  * (XZ distance), no Rigidbody. Ki blasts (Projectile.cs) come in Phase 5.
  *
- * Controls:
- *   P1: left stick / D-pad move, hold Cross = charge, Square = melee (in contact)
- *   P2: right stick move,        hold L1    = charge, R1     = melee (in contact)
- *   Start: pause (in fight) / rematch (match over)   Select+Start: quit to XMB
+ * Two controllers: pad on port 0 drives P1, port 1 drives P2 (same layout each).
+ * Controls (per pad):
+ *   Left stick / D-pad ... move      hold Cross ... charge ki
+ *   Square ............... melee (in contact)
+ *   Start ................ pause (in fight) / rematch (match over)
+ *   Select + Start ....... quit to XMB
  */
 
 #include <stdio.h>
@@ -85,7 +87,6 @@
 
 static int running = 1;
 static padInfo pad_info;
-static padData pad_data;
 static u32 *ttf_texture = NULL;
 
 /* Camera basis. */
@@ -104,6 +105,7 @@ static int   score1, score2;
 static int   melee_cd1, melee_cd2;
 static int   charging1, charging2;
 static int   moving1, moving2;
+static int   p1_conn, p2_conn;   /* controllers present on ports 0 / 1 */
 
 enum { GS_FIGHT, GS_ROUND, GS_MATCH };
 static int gstate;
@@ -183,6 +185,23 @@ static void clamp_pos(float *x, float *z)
 {
 	clampf(x, -ARENA_X + FIGHTER_HALF_X, ARENA_X - FIGHTER_HALF_X);
 	clampf(z, -ARENA_Z + FIGHTER_HALF_Z, ARENA_Z - FIGHTER_HALF_Z);
+}
+
+/* Read a player's movement intent (left stick + D-pad) from one pad. */
+static void read_move(const padData *pd, float *mx, float *mz)
+{
+	*mx = 0.0f; *mz = 0.0f;
+	/* Both axes exactly 0 = no analog data (digital pad / not read yet). */
+	if (!(pd->ANA_L_H == 0 && pd->ANA_L_V == 0)) {
+		*mx = axis(pd->ANA_L_H);
+		*mz = -axis(pd->ANA_L_V);   /* stick up -> +Z (away) */
+	}
+	if (pd->BTN_LEFT)  *mx -= 1.0f;
+	if (pd->BTN_RIGHT) *mx += 1.0f;
+	if (pd->BTN_UP)    *mz += 1.0f;
+	if (pd->BTN_DOWN)  *mz -= 1.0f;
+	clampf(mx, -1.0f, 1.0f);
+	clampf(mz, -1.0f, 1.0f);
 }
 
 /* SimpleController translation + PongPaddle clamp. Returns 1 if it moved. */
@@ -268,26 +287,40 @@ static void end_round(void)
 }
 
 /* --- per-frame game update ------------------------------------------------ */
+/* Edge state per pad: bit0 = Square (melee), bit1 = Start. */
+#define BTN_SQ 1u
+#define BTN_ST 2u
+
 /* Returns 0 to request quit. */
 static int update_game(void)
 {
-	static u32 prev = 0;
-	u32 cur = 0;
-	int connected;
+	static u32 prev[2] = { 0, 0 };
+	padData pd[2];
+	int conn[2] = { 0, 0 };
 
 	ioPadGetInfo(&pad_info);
-	connected = pad_info.status[0];
-	if (connected) ioPadGetData(0, &pad_data);
+	for (int i = 0; i < 2; i++) {
+		conn[i] = pad_info.status[i];
+		if (conn[i]) ioPadGetData(i, &pd[i]);
+	}
+	p1_conn = conn[0];
+	p2_conn = conn[1];
 
-	if (!connected) { moving1 = moving2 = charging1 = charging2 = 0; prev = 0; return 1; }
+	/* Quit: Select+Start on either pad. */
+	for (int i = 0; i < 2; i++)
+		if (conn[i] && pd[i].BTN_SELECT && pd[i].BTN_START) return 0;
 
-	if (pad_data.BTN_SELECT && pad_data.BTN_START) return 0;
-
-	cur = (pad_data.BTN_SQUARE ? 1u : 0u)
-	    | (pad_data.BTN_R1     ? 2u : 0u)
-	    | (pad_data.BTN_START  ? 4u : 0u);
-	u32 pressed = cur & ~prev;
-	prev = cur;
+	/* Per-pad edge detection (Square + Start). */
+	u32 pressed_sq[2] = { 0, 0 };
+	u32 pressed_start = 0;
+	for (int i = 0; i < 2; i++) {
+		u32 cur = 0;
+		if (conn[i]) cur = (pd[i].BTN_SQUARE ? BTN_SQ : 0u) | (pd[i].BTN_START ? BTN_ST : 0u);
+		u32 p = cur & ~prev[i];
+		prev[i] = cur;
+		pressed_sq[i] = p & BTN_SQ;
+		pressed_start |= (p & BTN_ST);
+	}
 
 	if (melee_cd1 > 0) melee_cd1--;
 	if (melee_cd2 > 0) melee_cd2--;
@@ -297,46 +330,31 @@ static int update_game(void)
 		return 1;
 	}
 	if (gstate == GS_MATCH) {
-		if (pressed & 4u) reset_match();
+		if (pressed_start) reset_match();
 		return 1;
 	}
 
 	/* GS_FIGHT */
-	if (pressed & 4u) { paused = !paused; }
+	if (pressed_start) paused = !paused;
 	if (paused) { moving1 = moving2 = charging1 = charging2 = 0; return 1; }
 
-	/* Movement (fighter 1: left stick + D-pad). */
-	float m1x = 0.0f, m1z = 0.0f;
-	if (!(pad_data.ANA_L_H == 0 && pad_data.ANA_L_V == 0)) {
-		m1x = axis(pad_data.ANA_L_H);
-		m1z = -axis(pad_data.ANA_L_V);
-	}
-	if (pad_data.BTN_LEFT)  m1x -= 1.0f;
-	if (pad_data.BTN_RIGHT) m1x += 1.0f;
-	if (pad_data.BTN_UP)    m1z += 1.0f;
-	if (pad_data.BTN_DOWN)  m1z -= 1.0f;
-	clampf(&m1x, -1.0f, 1.0f); clampf(&m1z, -1.0f, 1.0f);
+	/* Movement: P1 from pad 0, P2 from pad 1. */
+	float m1x = 0.0f, m1z = 0.0f, m2x = 0.0f, m2z = 0.0f;
+	if (conn[0]) read_move(&pd[0], &m1x, &m1z);
+	if (conn[1]) read_move(&pd[1], &m2x, &m2z);
 	moving1 = move_fighter(&f1x, &f1z, m1x, m1z, ki1);
-
-	/* Movement (fighter 2: right stick). */
-	float m2x = 0.0f, m2z = 0.0f;
-	if (!(pad_data.ANA_R_H == 0 && pad_data.ANA_R_V == 0)) {
-		m2x = axis(pad_data.ANA_R_H);
-		m2z = -axis(pad_data.ANA_R_V);
-	}
-	clampf(&m2x, -1.0f, 1.0f); clampf(&m2z, -1.0f, 1.0f);
 	moving2 = move_fighter(&f2x, &f2z, m2x, m2z, ki2);
 
-	/* Ki charge (P1 = Cross, P2 = L1). */
-	charging1 = pad_data.BTN_CROSS ? 1 : 0;
-	charging2 = pad_data.BTN_L1 ? 1 : 0;
+	/* Ki charge: hold Cross on each pad. */
+	charging1 = (conn[0] && pd[0].BTN_CROSS) ? 1 : 0;
+	charging2 = (conn[1] && pd[1].BTN_CROSS) ? 1 : 0;
 	charge_ki(&ki1, charging1, moving1);
 	charge_ki(&ki2, charging2, moving2);
 
-	/* Melee on contact (edge-triggered, gated by cooldown). */
+	/* Melee on contact (edge-triggered, cooldown-gated). */
 	if (fighters_in_contact()) {
-		if ((pressed & 1u) && melee_cd1 == 0) melee(1);
-		if ((pressed & 2u) && melee_cd2 == 0) melee(0);
+		if (pressed_sq[0] && melee_cd1 == 0) melee(1);
+		if (pressed_sq[1] && melee_cd2 == 0) melee(0);
 	}
 
 	/* Round end: someone filled the balance bar. */
@@ -494,8 +512,14 @@ static void draw_hud(void)
 		centered(248, "PAUSED", COLOR_WHITE, 26, 38);
 	}
 
+	/* Controller presence hints. */
+	if (!p1_conn)
+		centered(150, "Connect controller 1 (P1)", COLOR_P1, 16, 22);
+	if (!p2_conn)
+		centered(gstate == GS_FIGHT ? 180 : 312, "P2: connect controller 2", COLOR_P2, 14, 20);
+
 	display_ttf_string(28, SCREEN_HEIGHT - 28,
-		"KI BLAST ARENA - P4 | move stick | hold X/L1 charge | Square/R1 melee in contact | Start pause | Sel+Start quit",
+		"KI BLAST ARENA - P4 | Pad1=P1  Pad2=P2 | move stick | hold X charge | Square melee in contact | Start pause | Sel+Start quit",
 		COLOR_GRAY, 0, 10, 14);
 }
 

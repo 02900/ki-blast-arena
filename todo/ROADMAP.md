@@ -94,9 +94,11 @@ What we are reproducing (from the Unity project `powerofpong`):
   melee is edge-triggered, cooldown-gated, and knocks the opponent back.
 - ✅ **Round/match flow**: round ends when the bar hits a cap; first to 3 round wins
   takes the match; round-over and match-over banners; Start rematches.
-- ✅ Both fighters can fight (P1 = Cross charge / Square melee, P2 = L1 charge / R1
-  melee), so they can deplete each other and end a round. Fight HUD: balance bar +
-  two ki bars + score.
+- ✅ **Two controllers**: pad on port 0 drives P1, port 1 drives P2 (same layout each —
+  stick move, hold Cross charge, Square melee), read via `ioPadGetInfo().status[i]` +
+  `ioPadGetData(i, …)`. Start/Select+Start accepted from either pad; HUD shows a
+  "connect controller 2" hint when port 1 is empty. Fight HUD: balance bar + two ki
+  bars + score.
 - ⬜ **Exit criteria — fighters deplete each other and a round ends, on hardware:**
   confirm on PS3/RPCS3 (builds green; on-console feel to be verified by playtest).
 - Note: ki blasts (Projectile.cs) and the single battle/tournament/mission mode split
