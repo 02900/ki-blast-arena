@@ -61,9 +61,12 @@
 #define FIGHTER_W 2.4f
 #define FIGHTER_H 3.4f
 /* Ground footprint half-extents: the fighter's EDGE stops at the arena bound,
- * not its center, so no part of the body pokes past the floor. */
+ * not its center, so no part of the body pokes past the floor. The billboard is
+ * a flat plane facing the camera: it has visible width in X but no depth in Z,
+ * so the Z footprint is 0 (the base can reach the front/back border). When real
+ * meshes replace the billboards, give Z a real half-depth. */
 #define FIGHTER_HALF_X (FIGHTER_W * 0.5f)
-#define FIGHTER_HALF_Z 1.0f
+#define FIGHTER_HALF_Z 0.0f
 
 /* Movement model (SimpleController.cs). levelPower 1..10; curKi is a placeholder
  * until Phase 5 wires the real ki bar. moveSpeed = 0.2 + levelPower/50, then the
