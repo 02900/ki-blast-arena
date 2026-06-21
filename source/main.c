@@ -15,6 +15,7 @@
  * Two controllers: pad on port 0 drives P1, port 1 drives P2 (same layout each).
  * Controls (per pad):
  *   Left stick / D-pad ... move      hold Cross ... charge ki
+ *   Circle ............... fire ki blast (spends 30/60/80 ki -> tier 1/2/3)
  *   Square ............... melee (in contact)
  *   Start ................ pause (in fight) / rematch (match over)
  *   Select + Start ....... quit to XMB
@@ -78,6 +79,22 @@
 #define ROUND_BANNER  110       /* frames the round-over banner shows */
 #define FRAME_DT      (1.0f / 60.0f)
 
+/* Ki blasts (Projectile.cs / LaunchKiBlast). Circle fires the highest tier the
+ * current ki affords; the blast flies straight toward where the opponent was and
+ * transfers power on hit (like melee, but stronger and ranged). */
+#define KI_COST1      30.0f
+#define KI_COST2      60.0f
+#define KI_COST3      80.0f
+#define BLAST_SPEED   11.0f     /* world units/sec */
+#define BLAST_LIFE    240       /* frames (~4s, matches Projectile.lifeTime) */
+#define BLAST_Y       1.7f      /* chest height */
+#define BLAST_OFFSET  1.5f      /* spawn this far in front of the shooter */
+#define BLAST_HIT     1.9f      /* hit radius vs the opponent (XZ) */
+#define BLAST_DMGBASE 6.0f      /* transfer = DMGBASE*tier + levelPower*1.25 */
+#define MAX_BLASTS    12
+#define MAX_EXPL      12
+#define EXPL_LIFE     18
+
 #define STICK_DEAD    32
 
 /* Software camera (deterministic pinhole). */
@@ -106,6 +123,12 @@ static int   melee_cd1, melee_cd2;
 static int   charging1, charging2;
 static int   moving1, moving2;
 static int   p1_conn, p2_conn;   /* controllers present on ports 0 / 1 */
+
+/* Ki blast projectiles + explosion effects (simple fixed pools). */
+typedef struct { int active; float x, y, z, vx, vz; int owner, tier, life; } Blast;
+typedef struct { int active; float x, y, z; int owner, t; } Expl;
+static Blast blasts[MAX_BLASTS];
+static Expl  expls[MAX_EXPL];
 
 enum { GS_FIGHT, GS_ROUND, GS_MATCH };
 static int gstate;
@@ -257,6 +280,92 @@ static void melee(int by_p1)
 	}
 }
 
+static void spawn_expl(float x, float y, float z, int owner)
+{
+	for (int i = 0; i < MAX_EXPL; i++) {
+		if (!expls[i].active) {
+			expls[i].active = 1;
+			expls[i].x = x; expls[i].y = y; expls[i].z = z;
+			expls[i].owner = owner; expls[i].t = EXPL_LIFE;
+			return;
+		}
+	}
+}
+
+/* LookAt(opponent) + straight shot: aim at the opponent's position at launch. */
+static void spawn_blast(int owner, int tier)
+{
+	float sx = (owner == 1) ? f1x : f2x, sz = (owner == 1) ? f1z : f2z;
+	float tx = (owner == 1) ? f2x : f1x, tz = (owner == 1) ? f2z : f1z;
+	float dx = tx - sx, dz = tz - sz;
+	float len = sqrtf(dx*dx + dz*dz);
+	if (len < 1e-3f) { dx = (owner == 1) ? 1.0f : -1.0f; dz = 0.0f; len = 1.0f; }
+	dx /= len; dz /= len;
+	for (int i = 0; i < MAX_BLASTS; i++) {
+		if (!blasts[i].active) {
+			blasts[i].active = 1;
+			blasts[i].x = sx + dx * BLAST_OFFSET;
+			blasts[i].z = sz + dz * BLAST_OFFSET;
+			blasts[i].y = BLAST_Y;
+			blasts[i].vx = dx * BLAST_SPEED;
+			blasts[i].vz = dz * BLAST_SPEED;
+			blasts[i].owner = owner; blasts[i].tier = tier; blasts[i].life = BLAST_LIFE;
+			return;
+		}
+	}
+}
+
+/* LaunchKiBlast(): fire the strongest tier the current ki affords, spend it. */
+static void try_fire(int owner)
+{
+	float *ki = (owner == 1) ? &ki1 : &ki2;
+	int tier; float cost;
+	if (*ki > KI_COST3)      { tier = 2; cost = KI_COST3; }
+	else if (*ki > KI_COST2) { tier = 1; cost = KI_COST2; }
+	else if (*ki > KI_COST1) { tier = 0; cost = KI_COST1; }
+	else return;   /* not enough energy */
+	*ki -= cost;
+	clampf(ki, KI_MIN, KI_MAX);
+	spawn_blast(owner, tier);
+}
+
+/* Advance blasts + explosions; apply ki-blast damage (a power transfer). */
+static void update_effects(void)
+{
+	for (int i = 0; i < MAX_BLASTS; i++) {
+		Blast *b = &blasts[i];
+		if (!b->active) continue;
+		b->x += b->vx * FRAME_DT;
+		b->z += b->vz * FRAME_DT;
+		b->life--;
+		if (b->life <= 0 ||
+		    b->x < -ARENA_X - 3 || b->x > ARENA_X + 3 ||
+		    b->z < -ARENA_Z - 3 || b->z > ARENA_Z + 3) {
+			b->active = 0;
+			spawn_expl(b->x, b->y, b->z, b->owner);
+			continue;
+		}
+		float ox = (b->owner == 1) ? f2x : f1x;
+		float oz = (b->owner == 1) ? f2z : f1z;
+		float dx = b->x - ox, dz = b->z - oz;
+		if (dx*dx + dz*dz <= BLAST_HIT * BLAST_HIT) {
+			float amount = BLAST_DMGBASE * (b->tier + 1) + LEVEL_POWER * 1.25f;
+			if (b->owner == 1) balance += amount; else balance -= amount;
+			b->active = 0;
+			spawn_expl(b->x, b->y, b->z, b->owner);
+		}
+	}
+	for (int i = 0; i < MAX_EXPL; i++)
+		if (expls[i].active && --expls[i].t <= 0)
+			expls[i].active = 0;
+}
+
+static void clear_effects(void)
+{
+	for (int i = 0; i < MAX_BLASTS; i++) blasts[i].active = 0;
+	for (int i = 0; i < MAX_EXPL; i++)   expls[i].active = 0;
+}
+
 static void reset_positions(void)
 { f1x = -9.0f; f1z = 0.0f; f2x = 9.0f; f2z = 0.0f; }
 
@@ -264,6 +373,7 @@ static void reset_round(void)
 {
 	balance = BAL_START;
 	reset_positions();
+	clear_effects();
 	melee_cd1 = melee_cd2 = 0;
 	gstate = GS_FIGHT;
 }
@@ -287,9 +397,10 @@ static void end_round(void)
 }
 
 /* --- per-frame game update ------------------------------------------------ */
-/* Edge state per pad: bit0 = Square (melee), bit1 = Start. */
+/* Edge state per pad: bit0 = Square (melee), bit1 = Start, bit2 = Circle (blast). */
 #define BTN_SQ 1u
 #define BTN_ST 2u
+#define BTN_CI 4u
 
 /* Returns 0 to request quit. */
 static int update_game(void)
@@ -319,13 +430,17 @@ static int update_game(void)
 
 	/* Per-pad edge detection (Square + Start). */
 	u32 pressed_sq[2] = { 0, 0 };
+	u32 pressed_blast[2] = { 0, 0 };
 	u32 pressed_start = 0;
 	for (int i = 0; i < 2; i++) {
 		u32 cur = 0;
-		if (conn[i]) cur = (pd[i].BTN_SQUARE ? BTN_SQ : 0u) | (pd[i].BTN_START ? BTN_ST : 0u);
+		if (conn[i]) cur = (pd[i].BTN_SQUARE ? BTN_SQ : 0u)
+		                 | (pd[i].BTN_START  ? BTN_ST : 0u)
+		                 | (pd[i].BTN_CIRCLE ? BTN_CI : 0u);
 		u32 p = cur & ~prev[i];
 		prev[i] = cur;
 		pressed_sq[i] = p & BTN_SQ;
+		pressed_blast[i] = p & BTN_CI;
 		pressed_start |= (p & BTN_ST);
 	}
 
@@ -363,6 +478,11 @@ static int update_game(void)
 		if (pressed_sq[0] && melee_cd1 == 0) melee(1);
 		if (pressed_sq[1] && melee_cd2 == 0) melee(0);
 	}
+
+	/* Ki blasts (Circle), then advance all projectiles/explosions. */
+	if (pressed_blast[0]) try_fire(1);
+	if (pressed_blast[1]) try_fire(2);
+	update_effects();
 
 	/* Round end: someone filled the balance bar. */
 	if (balance >= BAL_MAX) { balance = BAL_MAX; round_winner = 1; score1++; end_round(); }
@@ -444,6 +564,44 @@ static void draw_fighter(float wx, float wz, u32 color, int aura)
 	ya2d_drawFillRectZ((int)(bx - hw * 0.5f), ry - hw, 0, hw, hw, color);
 }
 
+/* A glowing energy orb (concentric squares): faint glow, mid, white core. */
+static void draw_orb(float bx, float by, float sc, int tier, int owner)
+{
+	float r = sc * (0.5f + 0.18f * tier);
+	u32 glow = (owner == 1) ? 0x3FA9F555 : 0xFF884455;
+	u32 mid  = (owner == 1) ? 0x6FD0FFFF : 0xFFC040FF;
+	int R = (int)r, M = (int)(r * 0.6f), C = (int)(r * 0.3f);
+	if (R < 2) R = 2;
+	if (C < 1) C = 1;
+	ya2d_drawFillRectZ((int)bx - R, (int)by - R, 0, 2 * R, 2 * R, glow);
+	ya2d_drawFillRectZ((int)bx - M, (int)by - M, 0, 2 * M, 2 * M, mid);
+	ya2d_drawFillRectZ((int)bx - C, (int)by - C, 0, 2 * C, 2 * C, COLOR_WHITE);
+}
+
+static void draw_blasts(void)
+{
+	float sx, sy, sc;
+	for (int i = 0; i < MAX_BLASTS; i++)
+		if (blasts[i].active && project(blasts[i].x, blasts[i].y, blasts[i].z, &sx, &sy, &sc))
+			draw_orb(sx, sy, sc, blasts[i].tier, blasts[i].owner);
+}
+
+static void draw_expls(void)
+{
+	float sx, sy, sc;
+	for (int i = 0; i < MAX_EXPL; i++) {
+		if (!expls[i].active) continue;
+		if (!project(expls[i].x, expls[i].y, expls[i].z, &sx, &sy, &sc)) continue;
+		float frac = 1.0f - (float)expls[i].t / EXPL_LIFE;   /* 0 -> 1 over life */
+		int R = (int)(sc * (0.4f + 2.6f * frac));
+		u8 a = (u8)(220.0f * (1.0f - frac));
+		u32 base = (expls[i].owner == 1) ? 0x9FE0FF00 : 0xFFC08000;
+		u32 col = base | a;
+		ya2d_drawRectZ((int)sx - R, (int)sy - R, 0, 2 * R, 2 * R, col);
+		ya2d_drawRectZ((int)sx - R + 1, (int)sy - R + 1, 0, 2 * R - 2, 2 * R - 2, col);
+	}
+}
+
 static void draw_arena(void)
 {
 	floor_quad();
@@ -458,6 +616,9 @@ static void draw_arena(void)
 		draw_fighter(f2x, f2z, COLOR_P2, charging2);
 		draw_fighter(f1x, f1z, COLOR_P1, charging1);
 	}
+
+	draw_blasts();
+	draw_expls();
 }
 
 /* --- HUD ------------------------------------------------------------------ */
@@ -496,9 +657,18 @@ static void draw_hud(void)
 {
 	draw_balance_bar();
 
-	/* Ki bars in the corners. */
-	draw_bar(28, 22, 130, 14, ki1 / KI_MAX, COLOR_CYAN, 0);
-	draw_bar(SCREEN_WIDTH - 28 - 130, 22, 130, 14, ki2 / KI_MAX, COLOR_CYAN, 1);
+	/* Ki bars in the corners, with tier-cost ticks at 30/60/80. */
+	const int kw = 130;
+	const int kx2 = SCREEN_WIDTH - 28 - kw;
+	draw_bar(28, 22, kw, 14, ki1 / KI_MAX, COLOR_CYAN, 0);
+	draw_bar(kx2, 22, kw, 14, ki2 / KI_MAX, COLOR_CYAN, 1);
+	const float costs[3] = { KI_COST1, KI_COST2, KI_COST3 };
+	for (int k = 0; k < 3; k++) {
+		int t1 = 28 + (int)(kw * (costs[k] / KI_MAX));
+		int t2 = kx2 + (int)(kw * (1.0f - costs[k] / KI_MAX));
+		ya2d_drawFillRectZ(t1 - 1, 22, 0, 1, 14, 0xFFFFFF66);
+		ya2d_drawFillRectZ(t2, 22, 0, 1, 14, 0xFFFFFF66);
+	}
 	display_ttf_string(28, 38, "KI", COLOR_GRAY, 0, 11, 15);
 	display_ttf_string(SCREEN_WIDTH - 28 - 22, 38, "KI", COLOR_GRAY, 0, 11, 15);
 
@@ -526,7 +696,7 @@ static void draw_hud(void)
 		centered(gstate == GS_FIGHT ? 180 : 312, "P2: connect controller 2", COLOR_P2, 14, 20);
 
 	display_ttf_string(28, SCREEN_HEIGHT - 28,
-		"KI BLAST ARENA - P4 | Pad1=P1  Pad2=P2 | move stick | hold X charge | Square melee in contact | Start pause | Sel+Start quit",
+		"KI BLAST ARENA - P5 | Pad1=P1 Pad2=P2 | move | hold X charge | O blast | Square melee | Start pause | Sel+Start quit",
 		COLOR_GRAY, 0, 10, 14);
 }
 

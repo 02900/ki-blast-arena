@@ -104,10 +104,21 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: ki blasts (Projectile.cs) and the single battle/tournament/mission mode split
   are later (Phases 5 / 9); this runs one continuous first-to-3 match.
 
-### Phase 5 — Ki system ⬜
-- Port `Projectile.cs`: hold-to-charge, release to fire at 3 power levels
-  (30 / 60 / 80 ki), travel + sphere/ray hit detection, explosion FX, ki cost/regen.
-- **Exit criteria:** chargeable ki blasts deal tiered damage on hit.
+### Phase 5 — Ki system ✅
+- ✅ Ported `Projectile.cs` + `LaunchKiBlast()`: Circle fires the strongest tier the
+  current ki affords (>30 / >60 / >80 → tier 1/2/3), spending that ki. (Ki charging
+  itself landed in Phase 4.)
+- ✅ Projectiles fly **straight toward where the opponent was** at launch (LookAt +
+  forward, not homing), with a fixed-pool of blasts + explosion effects.
+- ✅ Hit detection (XZ radius vs the opponent) transfers power like melee but ranged
+  and stronger: `BLAST_DMGBASE·tier + levelPower·1.25`; blasts expire on lifetime or
+  when leaving the arena, spawning an explosion either way.
+- ✅ HUD: glowing depth-scaled orbs (per-owner colour), expanding explosion rings, and
+  tier-cost ticks (30/60/80) drawn on the ki bars.
+- ⬜ **Exit criteria — chargeable blasts deal tiered damage on hit, on hardware:**
+  confirm on PS3/RPCS3 (builds green; on-console feel to be verified by playtest).
+- Note: damage uses a single `BLAST_DMGBASE` rather than the original's quirky
+  inner/outer 5-vs-10 split; explosion knockback (OverlapSphere) is not ported.
 
 ### Phase 6 — HUD & UI ⬜
 - Health + ki bars and menus via **Clay** (`extern/clay-ps3`) + YA2D, replacing the
