@@ -1,0 +1,26 @@
+# Build artifacts
+build/
+build*/
+*.elf
+*.self
+*.fake.self
+*.pkg
+*.map
+EBOOT.BIN
+__pycache__/
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+last_frame*
+tiles
+*.code-workspace
+*.pyc
