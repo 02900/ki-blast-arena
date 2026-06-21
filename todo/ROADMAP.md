@@ -40,14 +40,17 @@ What we are reproducing (from the Unity project `powerofpong`):
   `.gitignore`, Docker `build.sh` / `deploy.sh`, CI (`build` + `lint`).
 - `source/main.c` placeholder stub, this roadmap, README.
 
-### Phase 1 — Build & toolchain green ⬜
-- Add `extern/clay-ps3` as a git submodule; re-add it to `SOURCES`/`INCLUDES` in the
-  `Makefile`. (Deferred from Phase 0 because the template's submodule URL is relative.)
-- Flesh out `main.c`: init Tiny3D + YA2D + fonts, render a blank arena frame, clean
-  XMB exit via `sysUtilCheckCallback`.
-- Confirm `make` builds a valid `src.self` through the Docker toolchain; CI `build`
-  job stays green.
-- **Exit criteria:** boots on PS3 (or RPCS3) to a blank/test screen.
+### Phase 1 — Build & toolchain green ✅
+- ✅ Added `extern/clay-ps3` as a git submodule (relative URL → `02900/clay-ps3`);
+  re-added it to `SOURCES`/`INCLUDES` in the `Makefile`.
+- ✅ Copied the `ttf_render` helper (`source/ttf_render.c`, `include/ttf_render.h`).
+- ✅ `source/main.c` inits Tiny3D + YA2D + fonts + the Clay backend, renders a static
+  "blank arena" frame (playfield box + two placeholder fighters + title) and exits
+  cleanly on START / XMB exit via `sysUtilCheckCallback`.
+- ✅ `make` builds a valid `src.self` through the Docker toolchain (verified locally;
+  CI `build` job runs the same image).
+- ⬜ **Exit criteria — boots on PS3 / RPCS3 to the test screen:** still to be confirmed
+  on hardware/emulator (cannot be verified from the build host).
 
 ### Phase 2 — Input ⬜
 - DualShock3 via the PSL1GHT pad API (`ioPadInit`, `ioPadGetData`).

@@ -25,14 +25,13 @@ include $(PSL1GHT)/ppu_rules
 #---------------------------------------------------------------------------------
 # Directories
 #
-# NOTE: extern/clay-ps3 (the Clay UI submodule) is intentionally NOT listed yet.
-# It lands in Phase 1 of todo/ROADMAP.md; re-add it to SOURCES and INCLUDES then.
+# extern/clay-ps3 is the Clay UI submodule (git submodule update --init --recursive).
 #---------------------------------------------------------------------------------
 TARGET		:=	$(notdir $(CURDIR))
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source extern/clay-ps3
 DATA		:=	data
-INCLUDES	:=	include
+INCLUDES	:=	include extern/clay-ps3
 PKGFILES	:=	pkgfiles
 
 #---------------------------------------------------------------------------------

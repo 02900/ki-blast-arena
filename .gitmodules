@@ -1,0 +1,3 @@
+[submodule "extern/clay-ps3"]
+	path = extern/clay-ps3
+	url = ../clay-ps3.git
