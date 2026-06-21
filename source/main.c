@@ -60,6 +60,10 @@
 #define ARENA_Z   6.0f
 #define FIGHTER_W 2.4f
 #define FIGHTER_H 3.4f
+/* Ground footprint half-extents: the fighter's EDGE stops at the arena bound,
+ * not its center, so no part of the body pokes past the floor. */
+#define FIGHTER_HALF_X (FIGHTER_W * 0.5f)
+#define FIGHTER_HALF_Z 1.0f
 
 /* Movement model (SimpleController.cs). levelPower 1..10; curKi is a placeholder
  * until Phase 5 wires the real ki bar. moveSpeed = 0.2 + levelPower/50, then the
@@ -182,8 +186,9 @@ static void move_fighter(float *x, float *z, float mx, float mz)
 	const float step = moveSpeed + (moveSpeed * 0.5f * PLACEHOLDER_KI / 100.0f);
 	*x += mx * step;
 	*z += mz * step;
-	clampf(x, -ARENA_X, ARENA_X);
-	clampf(z, -ARENA_Z, ARENA_Z);
+	/* Clamp the fighter's footprint edge (not its center) to the arena bounds. */
+	clampf(x, -ARENA_X + FIGHTER_HALF_X, ARENA_X - FIGHTER_HALF_X);
+	clampf(z, -ARENA_Z + FIGHTER_HALF_Z, ARENA_Z - FIGHTER_HALF_Z);
 }
 
 /* Returns 0 to request quit (Select+Start). */

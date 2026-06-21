@@ -71,10 +71,11 @@ What we are reproducing (from the Unity project `powerofpong`):
   spanning the `PongPaddle.cs` bounds (X ±12, Z ±6), with depth shading.
 - ✅ Two fighters as depth-scaled **billboards** (with floor shadow + head cap),
   painter's-algorithm sorted by camera depth. (Tiny3D mesh upgrade is later.)
-- ✅ Bounded world-space movement: both fighters move at world (x, 0, z), clamped to
-  X ±12 / Z ±6; F1 = left stick / D-pad, F2 = right stick (local-2P placeholder until
-  the CPU AI in Phase 7). Translation uses `SimpleController.cs`'s speed formula
-  (`moveSpeed = 0.2 + levelPower/50`, ki-scaled).
+- ✅ Bounded world-space movement: both fighters move at world (x, 0, z), with the
+  fighter's **footprint edge** (not its center) clamped to X ±12 / Z ±6; F1 = left
+  stick / D-pad, F2 = right stick (local-2P placeholder until the CPU AI in Phase 7).
+  Translation uses `SimpleController.cs`'s speed formula (`moveSpeed = 0.2 +
+  levelPower/50`, ki-scaled).
 - ✅ Renderer: a small **deterministic software pinhole projection** (lookAt camera +
   perspective divide) feeding Tiny3D's 2D primitives — chosen over Tiny3D's matrix
   pipeline so the camera is fully predictable without on-device trial-and-error.
