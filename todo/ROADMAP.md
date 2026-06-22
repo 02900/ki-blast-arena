@@ -186,9 +186,16 @@ What we are reproducing (from the Unity project `powerofpong`):
   result → Start returns to the menu (`ResetGame.cs`). Full loop closes.
 - ⬜ **Exit criteria — full menu→select→match→result→menu loop on hardware:** confirm on
   PS3/RPCS3 (builds green; on-console verification by playtest).
-- Note: some `levelPower` values are interpolated (binary prefabs); the original's
-  Tournament difficulty tiers, mission unlock gating, and per-character art aren't
-  reproduced (a single billboard style; arenas come in Phase 10).
+- ✅ **Tournament difficulty tiers** (`instancePrefabs.cs`): L1/R1 picks tier 1/2/3 in
+  char-select; the random opponent is drawn from that tier's index range (0–6 / 7–13 /
+  14–19), so higher tiers fight stronger characters.
+- ✅ **Sequential mission unlock**: missions start with 1 unlocked; beating mission N
+  unlocks N+1 (L1/R1 only cycles unlocked ones; the count shows in the UI).
+- ✅ **Per-character art**: the real 30 character icons (alpha cutouts) are downscaled
+  and embedded as sprites — each fighter renders as its character in the arena, on the
+  menu backdrop, and as a large preview in char-select.
+- Note: some `levelPower` values are interpolated (binary prefabs). Arenas/backgrounds
+  still come in Phase 10.
 
 ### Phase 10 — Arenas & asset pipeline ⬜
 - Bring the 7 arenas over as backgrounds / scene configs; establish the conversion

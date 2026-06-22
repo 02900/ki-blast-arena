@@ -171,6 +171,32 @@ static const Character roster[30] = {
 };
 #define ROSTER_N 30
 
+/* Per-character sprites (bin2o from data/charNN.png). */
+#define DECL_CHAR(n) extern const uint8_t char##n##_png[]; extern const uint32_t char##n##_png_size;
+DECL_CHAR(00) DECL_CHAR(01) DECL_CHAR(02) DECL_CHAR(03) DECL_CHAR(04)
+DECL_CHAR(05) DECL_CHAR(06) DECL_CHAR(07) DECL_CHAR(08) DECL_CHAR(09)
+DECL_CHAR(10) DECL_CHAR(11) DECL_CHAR(12) DECL_CHAR(13) DECL_CHAR(14)
+DECL_CHAR(15) DECL_CHAR(16) DECL_CHAR(17) DECL_CHAR(18) DECL_CHAR(19)
+DECL_CHAR(20) DECL_CHAR(21) DECL_CHAR(22) DECL_CHAR(23) DECL_CHAR(24)
+DECL_CHAR(25) DECL_CHAR(26) DECL_CHAR(27) DECL_CHAR(28) DECL_CHAR(29)
+#define CHAR_ENT(n) { char##n##_png, &char##n##_png_size }
+typedef struct { const uint8_t *png; const uint32_t *size; } CharPng;
+static const CharPng char_png[ROSTER_N] = {
+	CHAR_ENT(00), CHAR_ENT(01), CHAR_ENT(02), CHAR_ENT(03), CHAR_ENT(04),
+	CHAR_ENT(05), CHAR_ENT(06), CHAR_ENT(07), CHAR_ENT(08), CHAR_ENT(09),
+	CHAR_ENT(10), CHAR_ENT(11), CHAR_ENT(12), CHAR_ENT(13), CHAR_ENT(14),
+	CHAR_ENT(15), CHAR_ENT(16), CHAR_ENT(17), CHAR_ENT(18), CHAR_ENT(19),
+	CHAR_ENT(20), CHAR_ENT(21), CHAR_ENT(22), CHAR_ENT(23), CHAR_ENT(24),
+	CHAR_ENT(25), CHAR_ENT(26), CHAR_ENT(27), CHAR_ENT(28), CHAR_ENT(29),
+};
+static ya2d_Texture *char_tex[ROSTER_N];
+
+static void load_char_textures(void)
+{
+	for (int i = 0; i < ROSTER_N; i++)
+		char_tex[i] = ya2d_loadPNGfromBuffer((void *)char_png[i].png, *char_png[i].size);
+}
+
 /* Per-fighter strength (from the chosen character). */
 static float p1_power = DEFAULT_POWER, p2_power = DEFAULT_POWER;
 static int   p1_char = 0, p2_char = ROSTER_N - 1;
@@ -199,6 +225,8 @@ static const Mission missions[5] = {
 };
 #define MISSION_N 5
 static int mission_sel = 0;
+static int missions_unlocked = 1;   /* sequential unlock (beat N to open N+1) */
+static int tour_tier = 1;           /* Tournament difficulty tier 1..3 */
 
 /* --- unified pad polling (shared by all app states) ----------------------- */
 enum {
@@ -582,6 +610,10 @@ static void end_round(void)
 	if (score1 >= round_target || score2 >= round_target) {
 		match_winner = (score1 >= round_target) ? 1 : 2;
 		gstate = GS_MATCH;
+		/* Beating a mission unlocks the next one (sequential progression). */
+		if (mode == MODE_MISSION && match_winner == 1 &&
+		    mission_sel == missions_unlocked - 1 && missions_unlocked < MISSION_N)
+			missions_unlocked++;
 	} else {
 		gstate = GS_ROUND;
 		banner_timer = ROUND_BANNER;
@@ -690,10 +722,13 @@ static void update_menu(void)
 static void update_charsel(void)
 {
 	u32 e = nav_edges();
-	/* In Mission mode, L1/R1 cycle which mission (fixed enemy) to play. */
-	if (mode == MODE_MISSION && sel_phase == 0) {
-		if (g_pressed[0] & PB_L1) mission_sel = (mission_sel + MISSION_N - 1) % MISSION_N;
-		if (g_pressed[0] & PB_R1) mission_sel = (mission_sel + 1) % MISSION_N;
+	/* L1/R1 picks the mission (unlocked only) or the tournament difficulty tier. */
+	if (sel_phase == 0 && mode == MODE_MISSION) {
+		if (g_pressed[0] & PB_L1) mission_sel = (mission_sel + missions_unlocked - 1) % missions_unlocked;
+		if (g_pressed[0] & PB_R1) mission_sel = (mission_sel + 1) % missions_unlocked;
+	} else if (sel_phase == 0 && mode == MODE_TOURNAMENT) {
+		if (g_pressed[0] & PB_L1) tour_tier = (tour_tier > 1) ? tour_tier - 1 : 3;
+		if (g_pressed[0] & PB_R1) tour_tier = (tour_tier < 3) ? tour_tier + 1 : 1;
 	}
 	if (e & PB_LEFT)  sel_cursor = (sel_cursor + ROSTER_N - 1) % ROSTER_N;
 	if (e & PB_RIGHT) sel_cursor = (sel_cursor + 1) % ROSTER_N;
@@ -710,7 +745,11 @@ static void update_charsel(void)
 			p1_char = sel_cursor;
 			if (mode == MODE_BATTLE) { sel_phase = 1; }       /* pick P2 next */
 			else if (mode == MODE_TOURNAMENT) {
-				p2_char = rand() % ROSTER_N; start_fight();   /* random opponent */
+				/* random opponent within the tier's index range (instancePrefabs.cs). */
+				if (tour_tier == 1)      p2_char = rand() % 7;        /*  0-6  */
+				else if (tour_tier == 2) p2_char = 7 + rand() % 7;    /*  7-13 */
+				else                     p2_char = 14 + rand() % 6;   /* 14-19 */
+				start_fight();
 			} else { /* MODE_MISSION */
 				p2_char = missions[mission_sel].enemy; start_fight();
 			}
@@ -836,14 +875,32 @@ static void floor_grid(void)
 	tiny3d_End();
 }
 
-static void draw_fighter(float wx, float wz, u32 color, int aura)
+static void draw_fighter(float wx, float wz, u32 color, int aura, int char_id)
 {
 	float bx, by, sc;
 	if (!project(wx, 0.0f, wz, &bx, &by, &sc)) return;
-	float w = FIGHTER_W * sc, h = FIGHTER_H * sc;
+	float h = FIGHTER_H * sc;
+	ya2d_Texture *tex = (char_id >= 0 && char_id < ROSTER_N) ? char_tex[char_id] : NULL;
+
+	if (tex) {
+		/* Real character sprite (alpha cutout), aspect-preserved. */
+		float aspect = (float)tex->imageWidth / (float)tex->imageHeight;
+		float sw = h * aspect, sh = h;
+		int sx = (int)(bx - sw * 0.5f), sy = (int)(by - sh);
+		int shw = (int)(sw * 1.1f);
+		ya2d_drawFillRectZ((int)(bx - shw * 0.5f), (int)by - 3, 0, shw, 6, COLOR_SHADOW);
+		if (aura) {
+			ya2d_drawRectZ(sx - 3, sy - 3, 0, (int)sw + 6, (int)sh + 6, COLOR_ORANGE);
+			ya2d_drawRectZ(sx - 2, sy - 2, 0, (int)sw + 4, (int)sh + 4, COLOR_ORANGE);
+		}
+		ya2d_drawTextureEx(tex, (float)sx, (float)sy, 0, sw, sh);
+		return;
+	}
+
+	/* Fallback: the old colored billboard if the texture failed to load. */
+	float w = FIGHTER_W * sc;
 	int rx = (int)(bx - w * 0.5f), ry = (int)(by - h);
 	int rw = (int)w, rh = (int)h;
-
 	int shw = (int)(w * 1.05f);
 	ya2d_drawFillRectZ((int)(bx - shw * 0.5f), (int)by - 3, 0, shw, 6, COLOR_SHADOW);
 	if (aura) {
@@ -854,6 +911,15 @@ static void draw_fighter(float wx, float wz, u32 color, int aura)
 	ya2d_drawRectZ(rx, ry, 0, rw, rh, COLOR_WHITE);
 	int hw = rw / 2;
 	ya2d_drawFillRectZ((int)(bx - hw * 0.5f), ry - hw, 0, hw, hw, color);
+}
+
+/* Draw a character sprite at screen (cx, base_y feet) with a given height. */
+static void draw_char_sprite(int id, float cx, float base_y, float height)
+{
+	if (id < 0 || id >= ROSTER_N || !char_tex[id]) return;
+	ya2d_Texture *t = char_tex[id];
+	float w = height * ((float)t->imageWidth / (float)t->imageHeight);
+	ya2d_drawTextureEx(t, cx - w * 0.5f, base_y - height, 0, w, height);
 }
 
 /* A glowing energy orb (concentric squares): faint glow, mid, white core. */
@@ -902,11 +968,11 @@ static void draw_arena(void)
 	float d1[3], d2[3], p1[3] = { f1x, 0, f1z }, p2[3] = { f2x, 0, f2z };
 	v_sub(p1, cam_eye, d1); v_sub(p2, cam_eye, d2);
 	if (v_dot(d1, cam_f) >= v_dot(d2, cam_f)) {
-		draw_fighter(f1x, f1z, COLOR_P1, charging1);
-		draw_fighter(f2x, f2z, COLOR_P2, charging2);
+		draw_fighter(f1x, f1z, COLOR_P1, charging1, p1_char);
+		draw_fighter(f2x, f2z, COLOR_P2, charging2, p2_char);
 	} else {
-		draw_fighter(f2x, f2z, COLOR_P2, charging2);
-		draw_fighter(f1x, f1z, COLOR_P1, charging1);
+		draw_fighter(f2x, f2z, COLOR_P2, charging2, p2_char);
+		draw_fighter(f1x, f1z, COLOR_P1, charging1, p1_char);
 	}
 
 	draw_blasts();
@@ -1083,13 +1149,16 @@ static void build_and_render_ui(void)
 	clay_render(cmds);
 }
 
-/* Arena floor + two idle fighters, used as the menu / select backdrop. */
+/* Arena floor backdrop for the menu / select screens. */
 static void draw_backdrop(void)
 {
 	floor_quad();
 	floor_grid();
-	draw_fighter(-9.0f, 0.0f, COLOR_P1, 0);
-	draw_fighter( 9.0f, 0.0f, COLOR_P2, 0);
+	if (app_state == APP_MENU) {
+		draw_fighter(-9.0f, 0.0f, COLOR_P1, 0, p1_char);
+		draw_fighter( 9.0f, 0.0f, COLOR_P2, 0, p2_char);
+	}
+	/* In char-select the previews are drawn by render_charsel. */
 }
 
 /* Mode-select menu (Clay). */
@@ -1137,7 +1206,7 @@ static void render_charsel(void)
 {
 	static char cellnames[ROSTER_N][3];
 	static int cellnames_ready = 0;
-	static char title[24], info[72], p1line[80], mline[112];
+	static char title[24], info[72], p1line[80], mline[128], tline[80];
 
 	if (!cellnames_ready) {
 		for (int i = 0; i < ROSTER_N; i++) snprintf(cellnames[i], 3, "%02d", i);
@@ -1154,8 +1223,17 @@ static void render_charsel(void)
 	snprintf(info, sizeof info, "%02d  %s   -   PWR %.1f", sel_cursor, c->name, (double)c->power);
 	snprintf(p1line, sizeof p1line, "P1: %s", roster[p1_char].name);
 	const Mission *ms = &missions[mission_sel];
-	snprintf(mline, sizeof mline, "Mission %d/%d: %s   vs %s   (L1/R1)",
-	         mission_sel + 1, MISSION_N, ms->title, roster[ms->enemy].name);
+	snprintf(mline, sizeof mline, "Mission %d/%d (%d unlocked): %s   vs %s   (L1/R1)",
+	         mission_sel + 1, MISSION_N, missions_unlocked, ms->title, roster[ms->enemy].name);
+	snprintf(tline, sizeof tline, "Tournament  Tier %d/3   (L1/R1 change)", tour_tier);
+
+	/* Big character previews behind the grid: cursor (and the chosen P1 in phase 2). */
+	if (sel_phase == 0) {
+		draw_char_sprite(sel_cursor, SCREEN_WIDTH / 2.0f, 478.0f, 240.0f);
+	} else {
+		draw_char_sprite(p1_char,    300.0f, 470.0f, 220.0f);
+		draw_char_sprite(sel_cursor, 548.0f, 470.0f, 220.0f);
+	}
 
 	Clay_SetLayoutDimensions((Clay_Dimensions){ SCREEN_WIDTH, SCREEN_HEIGHT });
 	Clay_BeginLayout();
@@ -1194,6 +1272,8 @@ static void render_charsel(void)
 			CLAY_TEXT(clay_str(p1line), CLAY_TEXT_CONFIG({ .textColor = p1c, .fontSize = 16 }));
 		if (mode == MODE_MISSION && sel_phase == 0)
 			CLAY_TEXT(clay_str(mline), CLAY_TEXT_CONFIG({ .textColor = yellow, .fontSize = 16 }));
+		if (mode == MODE_TOURNAMENT && sel_phase == 0)
+			CLAY_TEXT(clay_str(tline), CLAY_TEXT_CONFIG({ .textColor = yellow, .fontSize = 16 }));
 
 		CLAY(CLAY_ID("CSpc"), { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } } }) {}
 		CLAY_TEXT(CLAY_STRING("D-pad: move    X: select    O: back"),
@@ -1210,6 +1290,7 @@ int main(int argc, char *argv[])
 
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
 	init_screen();
+	load_char_textures();    /* 30 character sprites (after ya2d_init) */
 	ioPadInit(7);
 	camera_setup();
 	audio_init();            /* MikMod music + SFX (silent if it fails) */
