@@ -558,24 +558,38 @@ static void floor_quad(void)
 	tiny3d_End();
 }
 
+/* Emit one grid line as a thin screen-space quad. Drawn as QUADS (not
+ * TINY3D_LINES): the raw line primitive could leave stray diagonal line geometry
+ * on some RSX/RPCS3 frames, corrupting the look for a frame. Call inside a
+ * tiny3d_SetPolygon(TINY3D_QUADS) block. */
+static void emit_segment(float ax, float ay, float bx, float by, float hw, u32 c)
+{
+	float dx = bx - ax, dy = by - ay;
+	float len = sqrtf(dx*dx + dy*dy);
+	if (len < 1e-3f) return;
+	float px = -dy / len * hw, py = dx / len * hw;   /* screen-space perpendicular */
+	tiny3d_VertexPos(ax + px, ay + py, 0); tiny3d_VertexColor(c);
+	tiny3d_VertexPos(bx + px, by + py, 0); tiny3d_VertexColor(c);
+	tiny3d_VertexPos(bx - px, by - py, 0); tiny3d_VertexColor(c);
+	tiny3d_VertexPos(ax - px, ay - py, 0); tiny3d_VertexColor(c);
+}
+
 static void floor_grid(void)
 {
 	float ax, ay, bx, by, sc;
 	const u32 line = 0x35587FFF, mid = 0x6FA0D0FF;
-	tiny3d_SetPolygon(TINY3D_LINES);
+	tiny3d_SetPolygon(TINY3D_QUADS);
 	for (int i = -12; i <= 12; i += 3) {
 		u32 c = (i == 0) ? mid : line;
 		if (!project((float)i, 0, -ARENA_Z, &ax, &ay, &sc)) continue;
 		if (!project((float)i, 0,  ARENA_Z, &bx, &by, &sc)) continue;
-		tiny3d_VertexPos(ax, ay, 0); tiny3d_VertexColor(c);
-		tiny3d_VertexPos(bx, by, 0); tiny3d_VertexColor(c);
+		emit_segment(ax, ay, bx, by, 1.0f, c);
 	}
 	for (int j = -6; j <= 6; j += 3) {
 		u32 c = (j == 0) ? mid : line;
 		if (!project(-ARENA_X, 0, (float)j, &ax, &ay, &sc)) continue;
 		if (!project( ARENA_X, 0, (float)j, &bx, &by, &sc)) continue;
-		tiny3d_VertexPos(ax, ay, 0); tiny3d_VertexColor(c);
-		tiny3d_VertexPos(bx, by, 0); tiny3d_VertexColor(c);
+		emit_segment(ax, ay, bx, by, 1.0f, c);
 	}
 	tiny3d_End();
 }
