@@ -1018,76 +1018,7 @@ static void draw_arena(void)
 	draw_expls();
 }
 
-/* --- HUD ------------------------------------------------------------------ */
-static int text_w(const char *s, int sw, int sh)
-{ return display_ttf_string(0, 0, s, 0, 0, sw, sh); }
-
-static void centered(int y, const char *s, u32 color, int sw, int sh)
-{ display_ttf_string((SCREEN_WIDTH - text_w(s, sw, sh)) / 2, y, s, color, 0, sw, sh); }
-
-static void draw_bar(int x, int y, int w, int h, float frac, u32 col, int anchor_right)
-{
-	if (frac < 0) frac = 0;
-	if (frac > 1) frac = 1;
-	ya2d_drawFillRectZ(x, y, 0, w, h, BAR_BG);
-	int fw = (int)(w * frac);
-	int fx = anchor_right ? x + (w - fw) : x;
-	if (fw > 0) ya2d_drawFillRectZ(fx, y, 0, fw, h, col);
-	ya2d_drawRectZ(x, y, 0, w, h, BAR_BORDER);
-}
-
-static void draw_balance_bar(void)
-{
-	const int x = 174, y = 22, w = 500, h = 22;
-	float frac = balance / BAL_MAX;
-	int bluew = (int)(w * frac);
-	ya2d_drawFillRectZ(x, y, 0, w, h, BAR_BG);
-	if (bluew > 0)     ya2d_drawFillRectZ(x, y, 0, bluew, h, COLOR_P1);
-	if (bluew < w)     ya2d_drawFillRectZ(x + bluew, y, 0, w - bluew, h, COLOR_P2);
-	ya2d_drawFillRectZ(x + w / 2 - 1, y - 3, 0, 2, h + 6, COLOR_WHITE);  /* center tick */
-	ya2d_drawRectZ(x, y, 0, w, h, BAR_BORDER);
-	display_ttf_string(x - 28, y + 3, "P1", COLOR_P1, 0, 14, 18);
-	display_ttf_string(x + w + 8, y + 3, "P2", COLOR_P2, 0, 14, 18);
-}
-
-static void draw_hud(void)
-{
-	draw_balance_bar();
-
-	/* Ki bars in the corners, with tier-cost ticks at 30/60/80. */
-	const int kw = 130;
-	const int kx2 = SCREEN_WIDTH - 28 - kw;
-	draw_bar(28, 22, kw, 14, ki1 / KI_MAX, COLOR_CYAN, 0);
-	draw_bar(kx2, 22, kw, 14, ki2 / KI_MAX, COLOR_CYAN, 1);
-	const float costs[3] = { KI_COST1, KI_COST2, KI_COST3 };
-	for (int k = 0; k < 3; k++) {
-		int t1 = 28 + (int)(kw * (costs[k] / KI_MAX));
-		int t2 = kx2 + (int)(kw * (1.0f - costs[k] / KI_MAX));
-		ya2d_drawFillRectZ(t1 - 1, 22, 0, 1, 14, 0xFFFFFF66);
-		ya2d_drawFillRectZ(t2, 22, 0, 1, 14, 0xFFFFFF66);
-	}
-	display_ttf_string(28, 38, "KI", COLOR_GRAY, 0, 11, 15);
-	display_ttf_string(SCREEN_WIDTH - 28 - 22, 38, "KI", COLOR_GRAY, 0, 11, 15);
-
-	/* Score, round/match result panels and PAUSED are drawn by the Clay UI
-	 * overlay (build_and_render_ui) — see Phase 6. */
-
-	/* Fighter names (P1 left, P2 right, with a CPU tag). */
-	display_ttf_string(28, 52, roster[p1_char].name, COLOR_P1, 0, 12, 16);
-	{
-		char nm[48];
-		snprintf(nm, sizeof nm, "%s%s", roster[p2_char].name, p2_is_cpu ? " (CPU)" : "");
-		display_ttf_string(SCREEN_WIDTH - 28 - text_w(nm, 12, 16), 52, nm, COLOR_P2, 0, 12, 16);
-	}
-	if (!p1_conn)
-		centered(150, "Connect controller 1 (P1)", COLOR_P1, 16, 22);
-
-	display_ttf_string(28, SCREEN_HEIGHT - 28,
-		"move | hold X charge | O blast | Square melee | Start pause (O quit to menu) | Sel+Start exit",
-		COLOR_GRAY, 0, 10, 14);
-}
-
-/* --- Clay UI overlay (score + result panels) ------------------------------ */
+/* --- Clay HUD ------------------------------------------------------------- */
 /* Build a Clay_String from a C-string for runtime text (CLAY_STRING is literals
  * only). The buffer must outlive clay_render, so callers use static storage. */
 static Clay_String clay_str(const char *s)
@@ -1099,15 +1030,93 @@ static Clay_String clay_str(const char *s)
 	return r;
 }
 
-/* The score pill (ScorePanel.cs) and the round/match result card
- * (PongEndPanel.cs) are laid out with Clay and drawn over the scene. */
-static void build_and_render_ui(void)
+/* A ki bar: dark track + a percent-width cyan fill, with floating tick marks at
+ * the tier costs (30/60/80). anchor_right mirrors it for player 2. */
+static void clay_ki_bar(float ki, int anchor_right)
 {
-	static char score_buf[32], title_buf[48], sub_buf[32];
+	const Clay_Color barbg = { 10, 20, 32, 255 }, barbd = { 64, 80, 104, 255 };
+	const Clay_Color cyan  = { 0, 220, 235, 255 }, tick = { 255, 255, 255, 90 };
+	const int KW = 130, KH = 14;
+	const float costs[3] = { KI_COST1, KI_COST2, KI_COST3 };
+	float f = ki / KI_MAX;
+	if (f < 0) f = 0;
+	if (f > 1) f = 1;
+
+	CLAY(CLAY_IDI("KiBar", anchor_right), {
+		.layout = {
+			.sizing = { CLAY_SIZING_FIXED(KW), CLAY_SIZING_FIXED(KH) },
+			.childAlignment = { .x = anchor_right ? CLAY_ALIGN_X_RIGHT : CLAY_ALIGN_X_LEFT }
+		},
+		.backgroundColor = barbg,
+		.border = { .color = barbd, .width = CLAY_BORDER_OUTSIDE(1) }
+	}) {
+		CLAY(CLAY_IDI("KiFill", anchor_right), {
+			.layout = { .sizing = { CLAY_SIZING_PERCENT(f), CLAY_SIZING_GROW(0) } },
+			.backgroundColor = cyan
+		}) {}
+		for (int k = 0; k < 3; k++) {
+			float tf = anchor_right ? (1.0f - costs[k] / KI_MAX) : (costs[k] / KI_MAX);
+			CLAY(CLAY_IDI("KiTick", anchor_right * 3 + k), {
+				.layout = { .sizing = { CLAY_SIZING_FIXED(1), CLAY_SIZING_FIXED(KH) } },
+				.floating = {
+					.attachTo = CLAY_ATTACH_TO_PARENT,
+					.attachPoints = { .element = CLAY_ATTACH_POINT_LEFT_TOP, .parent = CLAY_ATTACH_POINT_LEFT_TOP },
+					.offset = { (float)KW * tf, 0.0f }
+				},
+				.backgroundColor = tick
+			}) {}
+		}
+	}
+}
+
+/* The central balance bar: blue (P1) from the left, red (P2) filling the rest,
+ * with a floating white marker at the 50% center (the power tug-of-war line). */
+static void clay_balance_bar(void)
+{
+	const Clay_Color barbg = { 10, 20, 32, 255 }, barbd = { 64, 80, 104, 255 };
+	const Clay_Color p1c = { 63, 169, 245, 255 }, p2c = { 245, 80, 63, 255 };
+	const Clay_Color white = { 255, 255, 255, 255 };
+	const int BW = 440, BH = 22;
+	float f = balance / BAL_MAX;
+	if (f < 0) f = 0;
+	if (f > 1) f = 1;
+
+	CLAY(CLAY_ID("BalRow"), {
+		.layout = { .layoutDirection = CLAY_LEFT_TO_RIGHT, .childGap = 8, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } }
+	}) {
+		CLAY_TEXT(CLAY_STRING("P1"), CLAY_TEXT_CONFIG({ .textColor = p1c, .fontSize = 16 }));
+		CLAY(CLAY_ID("BalBar"), {
+			.layout = { .sizing = { CLAY_SIZING_FIXED(BW), CLAY_SIZING_FIXED(BH) }, .layoutDirection = CLAY_LEFT_TO_RIGHT },
+			.backgroundColor = barbg,
+			.border = { .color = barbd, .width = CLAY_BORDER_OUTSIDE(1) }
+		}) {
+			CLAY(CLAY_ID("BalBlue"), { .layout = { .sizing = { CLAY_SIZING_PERCENT(f), CLAY_SIZING_GROW(0) } }, .backgroundColor = p1c }) {}
+			CLAY(CLAY_ID("BalRed"),  { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } }, .backgroundColor = p2c }) {}
+			CLAY(CLAY_ID("BalMark"), {
+				.layout = { .sizing = { CLAY_SIZING_FIXED(2), CLAY_SIZING_FIXED(BH + 6) } },
+				.floating = {
+					.attachTo = CLAY_ATTACH_TO_PARENT,
+					.attachPoints = { .element = CLAY_ATTACH_POINT_CENTER_CENTER, .parent = CLAY_ATTACH_POINT_CENTER_CENTER }
+				},
+				.backgroundColor = white
+			}) {}
+		}
+		CLAY_TEXT(CLAY_STRING("P2"), CLAY_TEXT_CONFIG({ .textColor = p2c, .fontSize = 16 }));
+	}
+}
+
+/* The entire in-fight HUD, laid out and rendered with Clay (over the 3D scene):
+ * top status bar (names + ki bars + balance + score), the round/match result
+ * card and pause panel (PongEndPanel.cs / Pause.cs), and the bottom hints. */
+static void render_fight_hud(void)
+{
+	static char score_buf[32], title_buf[48], sub_buf[32], p2name[48];
 	snprintf(score_buf, sizeof score_buf, "%d   -   %d", score1, score2);
+	snprintf(p2name, sizeof p2name, "%s%s", roster[p2_char].name, p2_is_cpu ? " (CPU)" : "");
 
 	const Clay_Color white  = { 255, 255, 255, 255 };
 	const Clay_Color dim    = { 160, 160, 160, 255 };
+	const Clay_Color gray   = { 150, 150, 150, 255 };
 	const Clay_Color yellow = { 255, 210,  63, 255 };
 	const Clay_Color p1c    = {  63, 169, 245, 255 };
 	const Clay_Color p2c    = { 245,  80,  63, 255 };
@@ -1130,20 +1139,56 @@ static void build_and_render_ui(void)
 	Clay_SetLayoutDimensions((Clay_Dimensions){ SCREEN_WIDTH, SCREEN_HEIGHT });
 	Clay_BeginLayout();
 
-	CLAY(CLAY_ID("UIRoot"), {
+	CLAY(CLAY_ID("HudRoot"), {
 		.layout = {
 			.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
-			.padding = { 0, 0, 58, 0 },               /* push the pill below the bars */
+			.padding = { 16, 16, 12, 12 }, .childGap = 8,
 			.layoutDirection = CLAY_TOP_TO_BOTTOM,
 			.childAlignment = { .x = CLAY_ALIGN_X_CENTER }
 		}
 	}) {
-		CLAY(CLAY_ID("ScorePill"), {
-			.layout = { .padding = { 20, 20, 6, 6 }, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } },
-			.backgroundColor = pillbg,
-			.border = { .color = pillbd, .width = CLAY_BORDER_OUTSIDE(1) }
+		/* Top status bar: P1 column | balance + score | P2 column. */
+		CLAY(CLAY_ID("TopBar"), {
+			.layout = {
+				.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+				.layoutDirection = CLAY_LEFT_TO_RIGHT, .childGap = 12
+			}
 		}) {
-			CLAY_TEXT(clay_str(score_buf), CLAY_TEXT_CONFIG({ .textColor = white, .fontSize = 22 }));
+			CLAY(CLAY_ID("LeftCol"), {
+				.layout = { .sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_FIT(0) },
+				            .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 4 }
+			}) {
+				CLAY_TEXT(clay_str(roster[p1_char].name), CLAY_TEXT_CONFIG({ .textColor = p1c, .fontSize = 16 }));
+				CLAY(CLAY_ID("KiRowL"), { .layout = { .childGap = 6, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } } }) {
+					clay_ki_bar(ki1, 0);
+					CLAY_TEXT(CLAY_STRING("KI"), CLAY_TEXT_CONFIG({ .textColor = gray, .fontSize = 13 }));
+				}
+			}
+			CLAY(CLAY_ID("CenterCol"), {
+				.layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0) },
+				            .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 6,
+				            .childAlignment = { .x = CLAY_ALIGN_X_CENTER } }
+			}) {
+				clay_balance_bar();
+				CLAY(CLAY_ID("ScorePill"), {
+					.layout = { .padding = { 18, 18, 4, 4 }, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } },
+					.backgroundColor = pillbg,
+					.border = { .color = pillbd, .width = CLAY_BORDER_OUTSIDE(1) }
+				}) {
+					CLAY_TEXT(clay_str(score_buf), CLAY_TEXT_CONFIG({ .textColor = white, .fontSize = 20 }));
+				}
+			}
+			CLAY(CLAY_ID("RightCol"), {
+				.layout = { .sizing = { CLAY_SIZING_FIT(0), CLAY_SIZING_FIT(0) },
+				            .layoutDirection = CLAY_TOP_TO_BOTTOM, .childGap = 4,
+				            .childAlignment = { .x = CLAY_ALIGN_X_RIGHT } }
+			}) {
+				CLAY_TEXT(clay_str(p2name), CLAY_TEXT_CONFIG({ .textColor = p2c, .fontSize = 16 }));
+				CLAY(CLAY_ID("KiRowR"), { .layout = { .childGap = 6, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } } }) {
+					CLAY_TEXT(CLAY_STRING("KI"), CLAY_TEXT_CONFIG({ .textColor = gray, .fontSize = 13 }));
+					clay_ki_bar(ki2, 1);
+				}
+			}
 		}
 
 		CLAY(CLAY_ID("SpcTop"), { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } } }) {}
@@ -1182,10 +1227,15 @@ static void build_and_render_ui(void)
 		}
 
 		CLAY(CLAY_ID("SpcBot"), { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } } }) {}
+
+		if (!p1_conn)
+			CLAY_TEXT(CLAY_STRING("Connect controller 1 (P1)"),
+			          CLAY_TEXT_CONFIG({ .textColor = p1c, .fontSize = 18 }));
+		CLAY_TEXT(CLAY_STRING("move | hold X charge | O blast | Square melee | Start pause (O quit to menu) | Sel+Start exit"),
+		          CLAY_TEXT_CONFIG({ .textColor = gray, .fontSize = 12 }));
 	}
 
-	Clay_RenderCommandArray cmds = Clay_EndLayout(0.0f);
-	clay_render(cmds);
+	clay_render(Clay_EndLayout(0.0f));
 }
 
 /* Arena floor backdrop for the menu / select screens. */
@@ -1356,8 +1406,7 @@ int main(int argc, char *argv[])
 		begin_2d_frame();
 		if (app_state == APP_FIGHT) {
 			draw_arena();
-			draw_hud();              /* custom: balance + ki bars, names */
-			build_and_render_ui();   /* Clay: score pill + result/pause panels */
+			render_fight_hud();      /* entire HUD in Clay */
 		} else {
 			draw_backdrop();
 			if (app_state == APP_MENU) render_menu();

@@ -133,7 +133,20 @@ Clamp `pos ± half-extent` to the bounds so the body stops at the wall, not its 
 A camera-facing **billboard is flat in Z**, so its Z footprint is 0 (it can reach the
 front/back edge); give X a real half-width. Revisit when real meshes replace billboards.
 
-### 3.5 Fonts come from `/dev_flash`
+### 3.5 Clay UI: percent fills + floating overlays; `CLAY_IDI` needs a literal label
+
+The HUD/menus use the Clay layout engine (`extern/clay-ps3`). Two patterns cover most of
+a game HUD purely in Clay (no hand-drawn ya2d): a **progress bar** is a fixed track with a
+`CLAY_SIZING_PERCENT(frac)` fill child + a `CLAY_SIZING_GROW(0)` remainder; **tick marks /
+centered markers** are `CLAY_FLOATING` children (`attachTo = CLAY_ATTACH_TO_PARENT`,
+`.attachPoints`, `.offset = {px,0}`) so they overlay without disturbing the fill layout.
+
+⚠️ **`CLAY_IDI(label, i)` / `CLAY_ID(label)` need a string *literal*** — the macro
+stringifies it, so a ternary (`CLAY_IDI(cond ? "A" : "B", 0)`) fails to compile. Use a
+fixed literal label and disambiguate with the index: `CLAY_IDI("KiTick", side*3 + k)`.
+(Note: the PS3 Clay renderer ignores `cornerRadius` — borders are square.)
+
+### 3.6 Fonts come from `/dev_flash`
 
 System TTFs (`/dev_flash/data/font/SCE-PS3-*.TTF`) are present on real consoles and
 RPCS3. Load them via the `ttf_render` helper; don't ship your own for basic UI.
