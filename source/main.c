@@ -36,6 +36,7 @@
 #include "clay.h"
 #include "clay_renderer.h"
 #include "clay_nav.h"
+#include "audio.h"
 
 #define SCREEN_WIDTH  848
 #define SCREEN_HEIGHT 512
@@ -319,10 +320,12 @@ static void melee(int by_p1)
 		knockback(&f1x, &f1z, f2x, f2z);
 		melee_cd2 = MELEE_CD;
 	}
+	audio_play_hit();
 }
 
 static void spawn_expl(float x, float y, float z, int owner)
 {
+	audio_play_explosion();
 	for (int i = 0; i < MAX_EXPL; i++) {
 		if (!expls[i].active) {
 			expls[i].active = 1;
@@ -342,6 +345,7 @@ static void spawn_blast(int owner, int tier)
 	float len = sqrtf(dx*dx + dz*dz);
 	if (len < 1e-3f) { dx = (owner == 1) ? 1.0f : -1.0f; dz = 0.0f; len = 1.0f; }
 	dx /= len; dz /= len;
+	audio_play_blast();
 	for (int i = 0; i < MAX_BLASTS; i++) {
 		if (!blasts[i].active) {
 			blasts[i].active = 1;
@@ -932,11 +936,14 @@ int main(int argc, char *argv[])
 	init_screen();
 	ioPadInit(7);
 	camera_setup();
+	audio_init();            /* MikMod music + SFX (silent if it fails) */
 	reset_match();
 
 	while (running) {
 		if (!update_game())
 			running = 0;
+
+		audio_update();         /* feed the MikMod mixer each frame */
 
 		begin_2d_frame();
 		draw_arena();
@@ -948,6 +955,7 @@ int main(int argc, char *argv[])
 	}
 
 	printf("Exiting...\n");
+	audio_shutdown();
 	ya2d_deinit();
 	ioPadEnd();
 	return 0;

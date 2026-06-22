@@ -103,6 +103,9 @@ formats, deterministic camera, Unity-port tips) are in
 ## Credits
 
 - Original game: **Power of Pong** (Unity).
+- Placeholder battle music: the **"Haiku"** S3M tracker module from
+  [02900/ps3-homebrew-template](https://github.com/02900/ps3-homebrew-template) (to be
+  replaced with original/authored music). Combat SFX are synthesized at runtime.
 - Toolchain & structural conventions: [02900/ps3-toolchain](https://github.com/02900/ps3-toolchain),
   [02900/ps3-homebrew-template](https://github.com/02900/ps3-homebrew-template),
   [02900/ps3-remote-play](https://github.com/02900/ps3-remote-play).

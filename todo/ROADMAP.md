@@ -153,11 +153,21 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: patrol waypoints are synthetic (the original read a `PatrolPoints` object);
   `rand()` is unseeded so the AI's random retreats follow a fixed sequence.
 
-### Phase 8 — Audio ⬜
-- Music + SFX via **MikMod** (module playback) and/or `libaudio` (PCM). Convert the
-  Unity OGG/MP3 music to `.s3m`/`.mod` or PCM; SFX for melee, blast, explosion,
-  teleport. Replaces Unity AudioMixer (`PlayMusic.cs`).
-- **Exit criteria:** background music + core combat SFX.
+### Phase 8 — Audio ✅
+- ✅ Audio subsystem (`source/audio.c`, `include/audio.h`) on **MikMod**, fully
+  defensive: any init failure degrades to silence and never hangs the console.
+- ✅ **Music**: a looping tracker module embedded via `bin2o` (`data/battle.s3m`),
+  loaded from memory with a custom `MREADER` and played with `Player_Start` (wrap on).
+- ✅ **SFX**: melee / blast / explosion are **synthesized PCM** in-memory (sine + noise
+  envelopes), wrapped as little-endian WAV and loaded as MikMod samples — no external
+  SFX assets needed. Triggered from `melee()`, `spawn_blast()`, `spawn_expl()`;
+  `MikMod_Update()` runs each frame. Replaces Unity AudioMixer (`PlayMusic.cs`).
+- ⬜ **Exit criteria — music + combat SFX audible on hardware:** confirm on PS3/RPCS3
+  (builds green; **cannot be verified on the dev host** — listen carefully and be ready
+  to quit, since audio bugs can hang a console).
+- Note: the battle module is a PLACEHOLDER ("Haiku" S3M from the homebrew template) —
+  MikMod plays modules, not the original OGG/MP3, so real music needs a sourced/authored
+  module. The original's teleport/kick SFX and the AudioMixer volume buses aren't ported.
 
 ### Phase 9 — Game modes & flow ⬜
 - Start menu, character select (~30 characters), and the three modes: **Battle**,
