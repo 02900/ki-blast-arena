@@ -123,10 +123,19 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: damage uses a single `BLAST_DMGBASE` rather than the original's quirky
   inner/outer 5-vs-10 split (which is really boundary timing noise, not a zone system).
 
-### Phase 6 — HUD & UI ⬜
-- Health + ki bars and menus via **Clay** (`extern/clay-ps3`) + YA2D, replacing the
-  Unity Canvas. Port `ScorePanel.cs`, `PongEndPanel.cs`, HUD scripts.
-- **Exit criteria:** live HUD bars + a round-result panel.
+### Phase 6 — HUD & UI ✅
+- ✅ First real use of the **Clay** layout engine (`extern/clay-ps3`): a `build_and_
+  render_ui()` overlay laid out with `CLAY`/`CLAY_TEXT` and drawn via `clay_render()`
+  over the 3D scene.
+- ✅ Ported `ScorePanel.cs` → a Clay **score pill** (top-centre) and `PongEndPanel.cs`
+  → a Clay **result card** (centred, winner-coloured border, title; on match: final
+  score + "Press START to rematch"). Pause shows a Clay panel too.
+- ✅ Live HUD bars (balance + ki with tier ticks) stay custom-drawn — Clay can't cleanly
+  do the two-colour fill / tick marks, and they already work.
+- ⬜ **Exit criteria — live bars + a round-result panel, on hardware:** confirm on
+  PS3/RPCS3 (builds green; on-console look to be verified by playtest).
+- Note: establishes the Clay foundation for the Phase 9 menus (start / character
+  select / mode).
 
 ### Phase 7 — CPU AI ⬜
 - Port `CPUController.cs` + `FMS.cs` FSM (Patrol → Chase → Melee / ChargeKi → Attack),

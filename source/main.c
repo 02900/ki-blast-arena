@@ -708,22 +708,8 @@ static void draw_hud(void)
 	display_ttf_string(28, 38, "KI", COLOR_GRAY, 0, 11, 15);
 	display_ttf_string(SCREEN_WIDTH - 28 - 22, 38, "KI", COLOR_GRAY, 0, 11, 15);
 
-	char score[32];
-	snprintf(score, sizeof(score), "%d   -   %d", score1, score2);
-	centered(50, score, COLOR_WHITE, 18, 24);
-
-	if (gstate == GS_ROUND) {
-		char b[48];
-		snprintf(b, sizeof(b), "PLAYER %d WINS THE ROUND", round_winner);
-		centered(244, b, round_winner == 1 ? COLOR_P1 : COLOR_P2, 24, 34);
-	} else if (gstate == GS_MATCH) {
-		char b[48];
-		snprintf(b, sizeof(b), "PLAYER %d WINS THE MATCH!", match_winner);
-		centered(232, b, match_winner == 1 ? COLOR_P1 : COLOR_P2, 26, 38);
-		centered(280, "Press START to rematch", COLOR_YELLOW, 16, 22);
-	} else if (paused) {
-		centered(248, "PAUSED", COLOR_WHITE, 26, 38);
-	}
+	/* Score, round/match result panels and PAUSED are drawn by the Clay UI
+	 * overlay (build_and_render_ui) — see Phase 6. */
 
 	/* Controller presence hints. */
 	if (!p1_conn)
@@ -732,15 +718,110 @@ static void draw_hud(void)
 		centered(gstate == GS_FIGHT ? 180 : 312, "P2: connect controller 2", COLOR_P2, 14, 20);
 
 	display_ttf_string(28, SCREEN_HEIGHT - 28,
-		"KI BLAST ARENA - P5 | Pad1=P1 Pad2=P2 | move | hold X charge | O blast | Square melee | Start pause | Sel+Start quit",
+		"KI BLAST ARENA - P6 | Pad1=P1 Pad2=P2 | move | hold X charge | O blast | Square melee | Start pause | Sel+Start quit",
 		COLOR_GRAY, 0, 10, 14);
+}
+
+/* --- Clay UI overlay (score + result panels) ------------------------------ */
+/* Build a Clay_String from a C-string for runtime text (CLAY_STRING is literals
+ * only). The buffer must outlive clay_render, so callers use static storage. */
+static Clay_String clay_str(const char *s)
+{
+	Clay_String r;
+	r.isStaticallyAllocated = false;
+	r.length = (int32_t)strlen(s);
+	r.chars = s;
+	return r;
+}
+
+/* The score pill (ScorePanel.cs) and the round/match result card
+ * (PongEndPanel.cs) are laid out with Clay and drawn over the scene. */
+static void build_and_render_ui(void)
+{
+	static char score_buf[32], title_buf[48], sub_buf[32];
+	snprintf(score_buf, sizeof score_buf, "%d   -   %d", score1, score2);
+
+	const Clay_Color white  = { 255, 255, 255, 255 };
+	const Clay_Color dim    = { 160, 160, 160, 255 };
+	const Clay_Color yellow = { 255, 210,  63, 255 };
+	const Clay_Color p1c    = {  63, 169, 245, 255 };
+	const Clay_Color p2c    = { 245,  80,  63, 255 };
+	const Clay_Color pillbg = {  12,  20,  34, 210 };
+	const Clay_Color pillbd = {  64,  80, 104, 255 };
+	const Clay_Color panbg  = {  10,  16,  28, 235 };
+
+	int show_result = (gstate == GS_ROUND || gstate == GS_MATCH);
+	int show_pause  = (gstate == GS_FIGHT && paused);
+	Clay_Color win_col = white;
+	if (gstate == GS_ROUND) {
+		snprintf(title_buf, sizeof title_buf, "PLAYER %d WINS THE ROUND", round_winner);
+		win_col = (round_winner == 1) ? p1c : p2c;
+	} else if (gstate == GS_MATCH) {
+		snprintf(title_buf, sizeof title_buf, "PLAYER %d WINS THE MATCH!", match_winner);
+		snprintf(sub_buf, sizeof sub_buf, "Final  %d - %d", score1, score2);
+		win_col = (match_winner == 1) ? p1c : p2c;
+	}
+
+	Clay_SetLayoutDimensions((Clay_Dimensions){ SCREEN_WIDTH, SCREEN_HEIGHT });
+	Clay_BeginLayout();
+
+	CLAY(CLAY_ID("UIRoot"), {
+		.layout = {
+			.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+			.padding = { 0, 0, 58, 0 },               /* push the pill below the bars */
+			.layoutDirection = CLAY_TOP_TO_BOTTOM,
+			.childAlignment = { .x = CLAY_ALIGN_X_CENTER }
+		}
+	}) {
+		CLAY(CLAY_ID("ScorePill"), {
+			.layout = { .padding = { 20, 20, 6, 6 }, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } },
+			.backgroundColor = pillbg,
+			.border = { .color = pillbd, .width = CLAY_BORDER_OUTSIDE(1) }
+		}) {
+			CLAY_TEXT(clay_str(score_buf), CLAY_TEXT_CONFIG({ .textColor = white, .fontSize = 22 }));
+		}
+
+		CLAY(CLAY_ID("SpcTop"), { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } } }) {}
+
+		if (show_result) {
+			CLAY(CLAY_ID("ResultPanel"), {
+				.layout = {
+					.padding = CLAY_PADDING_ALL(24), .childGap = 12,
+					.layoutDirection = CLAY_TOP_TO_BOTTOM,
+					.childAlignment = { .x = CLAY_ALIGN_X_CENTER }
+				},
+				.backgroundColor = panbg,
+				.border = { .color = win_col, .width = CLAY_BORDER_OUTSIDE(3) }
+			}) {
+				CLAY_TEXT(clay_str(title_buf), CLAY_TEXT_CONFIG({ .textColor = win_col, .fontSize = 30 }));
+				if (gstate == GS_MATCH) {
+					CLAY_TEXT(clay_str(sub_buf), CLAY_TEXT_CONFIG({ .textColor = dim, .fontSize = 18 }));
+					CLAY_TEXT(CLAY_STRING("Press START to rematch"),
+					          CLAY_TEXT_CONFIG({ .textColor = yellow, .fontSize = 18 }));
+				}
+			}
+		} else if (show_pause) {
+			CLAY(CLAY_ID("PausePanel"), {
+				.layout = { .padding = CLAY_PADDING_ALL(24), .childAlignment = { .x = CLAY_ALIGN_X_CENTER } },
+				.backgroundColor = panbg,
+				.border = { .color = white, .width = CLAY_BORDER_OUTSIDE(2) }
+			}) {
+				CLAY_TEXT(CLAY_STRING("PAUSED"), CLAY_TEXT_CONFIG({ .textColor = white, .fontSize = 30 }));
+			}
+		}
+
+		CLAY(CLAY_ID("SpcBot"), { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } } }) {}
+	}
+
+	Clay_RenderCommandArray cmds = Clay_EndLayout(0.0f);
+	clay_render(cmds);
 }
 
 int main(int argc, char *argv[])
 {
 	(void)argc; (void)argv;
 
-	printf("\n=== Ki Blast Arena (Phase 4 combat) ===\n");
+	printf("\n=== Ki Blast Arena (Phase 6 HUD/UI) ===\n");
 
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
 	init_screen();
@@ -754,7 +835,8 @@ int main(int argc, char *argv[])
 
 		begin_2d_frame();
 		draw_arena();
-		draw_hud();
+		draw_hud();              /* custom: balance + ki bars, hints */
+		build_and_render_ui();   /* Clay: score pill + result/pause panels */
 		tiny3d_Flip();
 
 		sysUtilCheckCallback();
