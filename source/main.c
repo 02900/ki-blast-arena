@@ -100,6 +100,12 @@
 #define EXPL_KNOCK_RADIUS 5.0f
 #define EXPL_KNOCK_FORCE  2.2f   /* max world units pushed at the blast centre */
 
+/* CPU AI (CPUController.cs / FMS.cs). Difficulty scales with LEVEL_POWER (1..10). */
+#define CPU_SHOOT_RATE (0.9f - LEVEL_POWER / 75.0f)    /* sec between blasts  */
+#define CPU_PUNCH_RATE (0.20f - LEVEL_POWER / 100.0f)  /* sec between melees  */
+#define CPU_SPEED_BASE (10.0f + LEVEL_POWER / 2.0f)    /* world units/second  */
+#define CPU_SIGHT      10.0f                           /* chase within this   */
+
 #define STICK_DEAD    32
 
 /* Software camera (deterministic pinhole). */
@@ -141,6 +147,14 @@ static int banner_timer;
 static int round_winner;         /* 1 or 2 */
 static int match_winner;
 static int paused;
+
+/* CPU AI state — drives fighter 2 when no second controller is present. */
+enum { CPU_PATROL, CPU_CHASE, CPU_CHARGE, CPU_MELEE };
+static int   cpu_state;
+static int   cpu_destpoint;
+static float cpu_destx, cpu_destz;
+static float cpu_shoot_t, cpu_punch_t, cpu_charge_t;
+static const float patrol_pts[4][2] = { { 8, 4 }, { -8, 4 }, { -8, -4 }, { 8, -4 } };
 
 static void sys_callback(u64 status, u64 param, void *userdata)
 {
@@ -394,6 +408,91 @@ static void clear_effects(void)
 	for (int i = 0; i < MAX_EXPL; i++)   expls[i].active = 0;
 }
 
+/* --- CPU AI (FSM port of CPUController.cs) --------------------------------- */
+static void cpu_goto_next_point(void)
+{
+	cpu_destx = patrol_pts[cpu_destpoint][0];
+	cpu_destz = patrol_pts[cpu_destpoint][1];
+	cpu_destpoint = (cpu_destpoint + 1) % 4;
+}
+
+static void cpu_reset(void)
+{
+	cpu_state = CPU_PATROL;
+	cpu_destpoint = 0;
+	cpu_shoot_t = cpu_punch_t = 0.0f;
+	cpu_charge_t = 4.0f;
+	cpu_goto_next_point();
+}
+
+/* CPU ki only charges in the ChargeKi state (BalanceOfPower.chargeKi CPU branch). */
+static void charge_ki_cpu(void)
+{
+	if (cpu_state == CPU_CHARGE && ki2 < KI_MAX) ki2 += 15.0f * FRAME_DT;
+	else if (ki2 > KI_MIN)                       ki2 -= 3.0f * FRAME_DT;
+	clampf(&ki2, KI_MIN, KI_MAX);
+}
+
+/* Seek the current destination at the ki-scaled CPU speed (stops within 0.5). */
+static void cpu_move(void)
+{
+	float dx = cpu_destx - f2x, dz = cpu_destz - f2z;
+	float d = sqrtf(dx*dx + dz*dz);
+	if (d <= 0.5f) { moving2 = 0; return; }
+	float speed = (CPU_SPEED_BASE + CPU_SPEED_BASE * 0.5f * ki2 / 100.0f) * FRAME_DT;
+	float step = (speed < d) ? speed : d;
+	f2x += dx / d * step;
+	f2z += dz / d * step;
+	clamp_pos(&f2x, &f2z);
+	moving2 = 1;
+}
+
+/* FSM tick: Patrol -> Chase -> Melee / ChargeKi. Drives fighter 2 each frame. */
+static void cpu_update(void)
+{
+	float dx = f2x - f1x, dz = f2z - f1z;
+	float dist = sqrtf(dx*dx + dz*dz);
+	cpu_shoot_t += FRAME_DT;
+	cpu_punch_t += FRAME_DT;
+
+	switch (cpu_state) {
+	case CPU_PATROL: {
+		float bx = cpu_destx - f2x, bz = cpu_destz - f2z;
+		if (sqrtf(bx*bx + bz*bz) < 2.5f) cpu_goto_next_point();
+		else if (dist <= CPU_SIGHT) cpu_state = CPU_CHASE;
+		break;
+	}
+	case CPU_CHASE:
+		cpu_destx = f1x; cpu_destz = f1z;                 /* seek the player   */
+		if (dist <= 2.5f) cpu_state = CPU_MELEE;
+		else if (dist > CPU_SIGHT) { cpu_goto_next_point(); cpu_state = CPU_PATROL; }
+		else if (dist >= 4.0f && dist <= 9.0f && (rand() % 1000) < 14)
+			cpu_state = CPU_CHARGE;                       /* occasionally retreat to charge */
+		if (cpu_shoot_t >= CPU_SHOOT_RATE) { try_fire(2); cpu_shoot_t = 0.0f; }
+		break;
+	case CPU_CHARGE:
+		cpu_destx = -f1x; cpu_destz = -f1z;               /* retreat to the mirror point */
+		cpu_charge_t -= FRAME_DT * 2.0f;
+		if (cpu_charge_t <= 0.0f) { cpu_charge_t = 4.0f; cpu_state = CPU_PATROL; }
+		break;
+	case CPU_MELEE:
+		cpu_destx = f1x; cpu_destz = f1z;
+		if (dist > 3.0f) cpu_state = CPU_CHASE;
+		break;
+	}
+
+	charge_ki_cpu();
+	cpu_move();
+
+	/* Auto-melee on contact (BalanceOfPower.OnTriggerStay, CPU branch). */
+	if (fighters_in_contact() && cpu_punch_t >= CPU_PUNCH_RATE) {
+		melee(0);
+		cpu_punch_t = 0.0f;
+	}
+
+	charging2 = (cpu_state == CPU_CHARGE) ? 1 : 0;
+}
+
 static void reset_positions(void)
 { f1x = -9.0f; f1z = 0.0f; f2x = 9.0f; f2z = 0.0f; }
 
@@ -402,6 +501,7 @@ static void reset_round(void)
 	balance = BAL_START;
 	reset_positions();
 	clear_effects();
+	cpu_reset();
 	melee_cd1 = melee_cd2 = 0;
 	gstate = GS_FIGHT;
 }
@@ -496,18 +596,23 @@ static int update_game(void)
 	if (pressed_start) paused = !paused;
 	if (paused) { moving1 = moving2 = charging1 = charging2 = 0; return 1; }
 
-	/* Movement: P1 from pad 0, P2 from pad 1. */
-	float m1x = 0.0f, m1z = 0.0f, m2x = 0.0f, m2z = 0.0f;
+	/* Fighter 1: always the human on pad 0. */
+	float m1x = 0.0f, m1z = 0.0f;
 	if (conn[0]) read_move(&pd[0], &m1x, &m1z);
-	if (conn[1]) read_move(&pd[1], &m2x, &m2z);
 	moving1 = move_fighter(&f1x, &f1z, m1x, m1z, ki1);
-	moving2 = move_fighter(&f2x, &f2z, m2x, m2z, ki2);
-
-	/* Ki charge: hold Cross on each pad. */
 	charging1 = (conn[0] && pd[0].BTN_CROSS) ? 1 : 0;
-	charging2 = (conn[1] && pd[1].BTN_CROSS) ? 1 : 0;
 	charge_ki(&ki1, charging1, moving1);
-	charge_ki(&ki2, charging2, moving2);
+
+	/* Fighter 2: human on pad 1, or the CPU AI when no second controller. */
+	if (p2_conn) {
+		float m2x = 0.0f, m2z = 0.0f;
+		read_move(&pd[1], &m2x, &m2z);
+		moving2 = move_fighter(&f2x, &f2z, m2x, m2z, ki2);
+		charging2 = pd[1].BTN_CROSS ? 1 : 0;
+		charge_ki(&ki2, charging2, moving2);
+	} else {
+		cpu_update();   /* drives f2: move, charge, blasts, melee */
+	}
 
 	/* Melee on contact (edge-triggered, cooldown-gated). */
 	if (fighters_in_contact()) {
@@ -711,14 +816,14 @@ static void draw_hud(void)
 	/* Score, round/match result panels and PAUSED are drawn by the Clay UI
 	 * overlay (build_and_render_ui) — see Phase 6. */
 
-	/* Controller presence hints. */
+	/* Controller presence: P1 needs a pad; P2 is the CPU when pad 2 is absent. */
 	if (!p1_conn)
 		centered(150, "Connect controller 1 (P1)", COLOR_P1, 16, 22);
 	if (!p2_conn)
-		centered(gstate == GS_FIGHT ? 180 : 312, "P2: connect controller 2", COLOR_P2, 14, 20);
+		display_ttf_string(SCREEN_WIDTH - 92, 52, "P2: CPU", COLOR_P2, 0, 12, 16);
 
 	display_ttf_string(28, SCREEN_HEIGHT - 28,
-		"KI BLAST ARENA - P6 | Pad1=P1 Pad2=P2 | move | hold X charge | O blast | Square melee | Start pause | Sel+Start quit",
+		"KI BLAST ARENA - P7 | P1=pad1  P2=pad2 or CPU | move | hold X charge | O blast | Square melee | Start pause",
 		COLOR_GRAY, 0, 10, 14);
 }
 
@@ -821,7 +926,7 @@ int main(int argc, char *argv[])
 {
 	(void)argc; (void)argv;
 
-	printf("\n=== Ki Blast Arena (Phase 6 HUD/UI) ===\n");
+	printf("\n=== Ki Blast Arena (Phase 7 CPU AI) ===\n");
 
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
 	init_screen();

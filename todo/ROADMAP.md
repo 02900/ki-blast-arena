@@ -137,12 +137,21 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: establishes the Clay foundation for the Phase 9 menus (start / character
   select / mode).
 
-### Phase 7 — CPU AI ⬜
-- Port `CPUController.cs` + `FMS.cs` FSM (Patrol → Chase → Melee / ChargeKi → Attack),
-  with the 1–10 difficulty scalar.
-- **Replace Unity NavMesh** with hand-rolled steering/seek toward the player (no
-  pathfinding library on PS3). See Risks.
-- **Exit criteria:** a playable single-player match vs the CPU.
+### Phase 7 — CPU AI ✅
+- ✅ Ported the `CPUController.cs` + `FMS.cs` FSM: **Patrol → Chase → Melee / ChargeKi**.
+  Patrol roams synthetic waypoints; Chase seeks the player and fires blasts at
+  `shootRate`; ChargeKi retreats to the mirror point and is the **only** state that
+  refills ki (+15/s, matching the CPU branch of `chargeKi()`); Melee auto-punches on
+  contact at `punchRate`.
+- ✅ Difficulty from the 1–10 `LEVEL_POWER` scalar drives `shootRate`, `punchRate`, and
+  `speedBase` (ki-scaled), via the original formulas.
+- ✅ **NavMesh replaced** with hand-rolled seek (move toward the destination at the
+  ki-scaled speed, stop within 0.5) — no pathfinding lib.
+- ✅ The CPU drives **fighter 2 whenever pad 2 is absent** (HUD shows "P2: CPU"); plug
+  in a second controller and it becomes human 2P. Single-player match vs CPU is playable.
+- ⬜ **Exit criteria — playable single-player match on hardware:** confirm on PS3/RPCS3.
+- Note: patrol waypoints are synthetic (the original read a `PatrolPoints` object);
+  `rand()` is unseeded so the AI's random retreats follow a fixed sequence.
 
 ### Phase 8 — Audio ⬜
 - Music + SFX via **MikMod** (module playback) and/or `libaudio` (PCM). Convert the
