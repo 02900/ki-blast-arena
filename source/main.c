@@ -406,20 +406,28 @@ static void end_round(void)
 static int update_game(void)
 {
 	static u32 prev[2] = { 0, 0 };
+	static padData held[2];   /* last good packet per port (persists across frames) */
 	padData pd[2];
 	int conn[2] = { 0, 0 };
 
 	ioPadGetInfo(&pad_info);
 	for (int i = 0; i < 2; i++) {
-		/* Zero the struct BEFORE reading: ioPadGetData leaves the button/analog
-		 * fields untouched on an idle frame (it sets len = 0 when there is no new
-		 * data), so an uninitialized struct would feed stack garbage and make the
-		 * fighter flail. Zeroed + unchanged == a neutral frame, which is correct.
-		 * Connection is status[i] + a successful read; do NOT gate on len > 0, or a
-		 * motionless controller would read as disconnected. */
-		memset(&pd[i], 0, sizeof(pd[i]));
-		if (pad_info.status[i] && ioPadGetData(i, &pd[i]) == 0)
+		/* ioPadGetData sets len = 0 on frames with NO new data (e.g. a button held
+		 * while the sticks are still). Using that frame as-is would read the held
+		 * button as released and stall ki charging. So refresh our retained state
+		 * only on a fresh packet (len > 0) and reuse it otherwise; a held input
+		 * stays held. Zero-init avoids stack garbage from a phantom port. */
+		padData tmp;
+		memset(&tmp, 0, sizeof(tmp));
+		if (pad_info.status[i] && ioPadGetData(i, &tmp) == 0) {
 			conn[i] = 1;
+			if (tmp.len > 0) held[i] = tmp;   /* fresh data: remember it */
+			pd[i] = held[i];                  /* else reuse last known state */
+		} else {
+			conn[i] = 0;
+			memset(&held[i], 0, sizeof(held[i]));   /* forget on disconnect */
+			memset(&pd[i], 0, sizeof(pd[i]));
+		}
 	}
 	p1_conn = conn[0];
 	p2_conn = conn[1];
