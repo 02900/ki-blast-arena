@@ -94,6 +94,12 @@ Built against the libraries the toolchain image ships: **Tiny3D** (3D), **YA2D**
 
 The full, phase-by-phase migration plan is in **[todo/ROADMAP.md](todo/ROADMAP.md)**.
 
+## Patterns & gotchas
+
+Reusable conventions and traps hit while porting (PSL1GHT pad quirks, Tiny3D colour
+formats, deterministic camera, Unity-port tips) are in
+**[docs/PATTERNS.md](docs/PATTERNS.md)** — read it before adding input or rendering code.
+
 ## Credits
 
 - Original game: **Power of Pong** (Unity).
