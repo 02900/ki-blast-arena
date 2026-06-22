@@ -94,6 +94,11 @@
 #define MAX_BLASTS    12
 #define MAX_EXPL      12
 #define EXPL_LIFE     18
+/* Explosion knockback (Projectile.cs OverlapSphere(radius 5) on impact). The
+ * original pushed every rigidbody toward the world origin; we push radially out
+ * from the blast (intuitive), scaled by proximity. */
+#define EXPL_KNOCK_RADIUS 5.0f
+#define EXPL_KNOCK_FORCE  2.2f   /* max world units pushed at the blast centre */
 
 #define STICK_DEAD    32
 
@@ -264,6 +269,28 @@ static void knockback(float *tx, float *tz, float fromx, float fromz)
 	clamp_pos(tx, tz);
 }
 
+/* Push one fighter radially away from an explosion at (ex, ez), scaled by how
+ * close it is (full force at the centre, zero at EXPL_KNOCK_RADIUS). */
+static void blast_push(float *fx, float *fz, float ex, float ez)
+{
+	float dx = *fx - ex, dz = *fz - ez;
+	float dist = sqrtf(dx*dx + dz*dz);
+	if (dist >= EXPL_KNOCK_RADIUS) return;
+	float falloff = 1.0f - dist / EXPL_KNOCK_RADIUS;
+	if (dist < 1e-3f) { dx = 1.0f; dz = 0.0f; dist = 1.0f; }
+	float push = EXPL_KNOCK_FORCE * falloff;
+	*fx += dx / dist * push;
+	*fz += dz / dist * push;
+	clamp_pos(fx, fz);
+}
+
+/* OverlapSphere shove: every fighter within range is knocked back on impact. */
+static void explosion_knockback(float ex, float ez)
+{
+	blast_push(&f1x, &f1z, ex, ez);
+	blast_push(&f2x, &f2z, ex, ez);
+}
+
 /* Attack(): transfer power, grant ki, knock the opponent back. */
 static void melee(int by_p1)
 {
@@ -351,6 +378,7 @@ static void update_effects(void)
 		if (dx*dx + dz*dz <= BLAST_HIT * BLAST_HIT) {
 			float amount = BLAST_DMGBASE * (b->tier + 1) + LEVEL_POWER * 1.25f;
 			if (b->owner == 1) balance += amount; else balance -= amount;
+			explosion_knockback(b->x, b->z);   /* OverlapSphere shove on impact */
 			b->active = 0;
 			spawn_expl(b->x, b->y, b->z, b->owner);
 		}

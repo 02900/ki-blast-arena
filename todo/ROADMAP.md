@@ -117,8 +117,11 @@ What we are reproducing (from the Unity project `powerofpong`):
   tier-cost ticks (30/60/80) drawn on the ki bars.
 - ⬜ **Exit criteria — chargeable blasts deal tiered damage on hit, on hardware:**
   confirm on PS3/RPCS3 (builds green; on-console feel to be verified by playtest).
+- ✅ Explosion knockback ported (`OverlapSphere`): an impact shoves every fighter
+  within `EXPL_KNOCK_RADIUS` radially outward, scaled by proximity (the original pushed
+  toward the world origin — we use the intuitive radial push).
 - Note: damage uses a single `BLAST_DMGBASE` rather than the original's quirky
-  inner/outer 5-vs-10 split; explosion knockback (OverlapSphere) is not ported.
+  inner/outer 5-vs-10 split (which is really boundary timing noise, not a zone system).
 
 ### Phase 6 — HUD & UI ⬜
 - Health + ki bars and menus via **Clay** (`extern/clay-ps3`) + YA2D, replacing the
