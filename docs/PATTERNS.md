@@ -133,13 +133,27 @@ Clamp `pos ± half-extent` to the bounds so the body stops at the wall, not its 
 A camera-facing **billboard is flat in Z**, so its Z footprint is 0 (it can reach the
 front/back edge); give X a real half-width. Revisit when real meshes replace billboards.
 
-### 3.5 Clay UI: percent fills + floating overlays; `CLAY_IDI` needs a literal label
+### 3.5 Prefer Clay for ALL 2D UI/HUD — it avoids render glitches ⚠️
 
-The HUD/menus use the Clay layout engine (`extern/clay-ps3`). Two patterns cover most of
-a game HUD purely in Clay (no hand-drawn ya2d): a **progress bar** is a fixed track with a
-`CLAY_SIZING_PERCENT(frac)` fill child + a `CLAY_SIZING_GROW(0)` remainder; **tick marks /
-centered markers** are `CLAY_FLOATING` children (`attachTo = CLAY_ATTACH_TO_PARENT`,
-`.attachPoints`, `.offset = {px,0}`) so they overlay without disturbing the fill layout.
+**Build every HUD / menu / overlay with the Clay layout engine (`extern/clay-ps3`), not
+hand-drawn `ya2d`/`ttf` calls.** Reserve raw `ya2d`/`tiny3d` primitives for the 3D scene
+(floor, sprites, projectiles) only.
+
+**Why (hard-won):** mixing hand-drawn `display_ttf_string` / `ya2d_drawRectZ` HUD draws
+with the 3D scene produced **transient single-frame render glitches** — warped bars,
+scattered text, stray geometry across the frame — that were maddening to chase (a `LINES`
+→ quads attempt didn't fix it). The glitches **disappeared the moment the HUD was moved
+into Clay** (`clay_render` issues its draws through one consistent path). So a split HUD
+(some Clay, some hand-drawn) is the worst case; go all-Clay.
+
+Two patterns cover almost any game HUD purely in Clay:
+- **Progress bar** = a fixed-size track with a `CLAY_SIZING_PERCENT(frac)` fill child + a
+  `CLAY_SIZING_GROW(0)` remainder (e.g. the blue/red balance bar, the ki bars).
+- **Tick marks / centered markers** = `CLAY_FLOATING` children
+  (`attachTo = CLAY_ATTACH_TO_PARENT`, `.attachPoints`, `.offset = {px,0}`) so they overlay
+  a bar without disturbing its fill layout.
+
+Text, borders, images and semi-transparent backgrounds all render (alpha blends).
 
 ⚠️ **`CLAY_IDI(label, i)` / `CLAY_ID(label)` need a string *literal*** — the macro
 stringifies it, so a ternary (`CLAY_IDI(cond ? "A" : "B", 0)`) fails to compile. Use a
@@ -265,8 +279,10 @@ calls no-ops (degrade to silence). Isolate audio in its own file so it's easy to
 1. Read input from the **retained** pad packet, never assume fresh data each frame.
 2. **Edge-detect** one-shot actions; level-read holds.
 3. Watch the **colour format** (clear = ARGB, ya2d/vertex = RGBA).
-4. Keep the **camera math deterministic**; sort draws far-to-near.
-5. Build **green under `-Wall`** in the toolchain image; mark on-hardware as unverified.
-6. **Guard audio init defensively** — a bad init can hang the console, and you can't hear
+4. Build **all 2D UI/HUD in Clay** (not hand-drawn ya2d/ttf) — a split HUD causes
+   transient render glitches; keep raw primitives for the 3D scene only.
+5. Keep the **camera math deterministic**; sort draws far-to-near.
+6. Build **green under `-Wall`** in the toolchain image; mark on-hardware as unverified.
+7. **Guard audio init defensively** — a bad init can hang the console, and you can't hear
    it on the dev host.
-7. **Document deviations** from the source game.
+8. **Document deviations** from the source game.
