@@ -27,6 +27,11 @@ future PS3 homebrew (and, where noted, any game port). Each entry is **what to d
   one: `-Wmisleading-indentation` from `if (a) x; if (b) y;` on one line — split it.
 - **Small, reversible increments.** Build green after every change; a wrong matrix/
   color/sign often shows only as a black or garbled screen the user has to catch.
+- **Transient toolchain segfaults are normal under emulation.** The PPU gcc 7.2
+  (`cc1` / `collect2`) sporadically crashes with "internal compiler error: Segmentation
+  fault" when the x86_64 image runs emulated on Apple Silicon. It's not your code —
+  just re-run. `scripts/build.sh` retries automatically; don't go hunting a code cause
+  unless the failure is *deterministic* (same error every run).
 
 ## 2. Input — DualShock via the PSL1GHT pad API
 

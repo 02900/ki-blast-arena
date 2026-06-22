@@ -28,7 +28,17 @@ case "${1:-build}" in
 esac
 
 echo ">> Building with $IMAGE (make $TARGET)"
-docker run --rm \
-  -v "$REPO_ROOT":/src -w /src \
-  "$IMAGE" \
-  make $TARGET
+
+# The PPU gcc 7.2 toolchain occasionally segfaults (cc1 / collect2) when run under
+# emulation (x86_64 image on Apple Silicon). These crashes are transient and
+# unrelated to the code, so retry a few times before giving up.
+attempts=3
+for try in $(seq 1 "$attempts"); do
+  if docker run --rm -v "$REPO_ROOT":/src -w /src "$IMAGE" make $TARGET; then
+    exit 0
+  fi
+  echo ">> build attempt $try/$attempts failed" >&2
+  [ "$try" -lt "$attempts" ] && echo ">> retrying (toolchain may have segfaulted under emulation)..." >&2
+done
+echo ">> build failed after $attempts attempts" >&2
+exit 1
