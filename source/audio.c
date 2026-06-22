@@ -1,40 +1,36 @@
 /*
  * Ki Blast Arena - audio (Phase 8)
  *
- * MikMod-based audio: a looping tracker module for the battle theme, plus short
- * PCM sound effects synthesized in-memory (no external SFX assets needed) and
- * loaded as MikMod samples through an in-memory reader.
+ * MikMod-based audio using the ORIGINAL game's assets, converted to mono 16-bit
+ * PCM WAV (via ffmpeg) and embedded with bin2o:
+ *   - Music: the original "battle ambient" track (OGG -> WAV), played as a
+ *     looping sample (MikMod plays modules or samples; the OGG can't be a
+ *     module, so it loops as one long PCM sample).
+ *   - SFX: the original meleehit1 / basicbeam_fire / kiplosion WAVs.
  *
  * Everything is defensive: if any step fails, audio_ok stays 0 and every entry
  * point becomes a no-op, so a bad audio init can never hang the PS3.
- *
- * NOTE: the battle module (data/battle.s3m) is a PLACEHOLDER (the "Haiku" S3M
- * from the PS3 homebrew template). MikMod plays tracker modules, not the
- * original game's OGG/MP3, so real music needs a sourced/authored module later.
  */
 
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 
 #include <ppu-types.h>
 #include <mikmod.h>
 
 #include "audio.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-/* Embedded battle module (bin2o symbol from data/battle.s3m). */
-extern const unsigned char battle_s3m[];
-extern const unsigned int  battle_s3m_size;
+/* Embedded WAVs (bin2o symbols from the data/ folder). */
+extern const unsigned char music_bin[];      extern const unsigned int music_bin_size;
+extern const unsigned char sfx_hit_bin[];    extern const unsigned int sfx_hit_bin_size;
+extern const unsigned char sfx_blast_bin[];  extern const unsigned int sfx_blast_bin_size;
+extern const unsigned char sfx_expl_bin[];   extern const unsigned int sfx_expl_bin_size;
 
 static int     audio_ok = 0;
-static MODULE *music = NULL;
-static SAMPLE *sfx_hit = NULL, *sfx_blast = NULL, *sfx_expl = NULL;
+static SAMPLE *music = NULL, *sfx_hit = NULL, *sfx_blast = NULL, *sfx_expl = NULL;
+static SBYTE   music_voice = -1;
 
-/* ---- in-memory MREADER (so MikMod can load from embedded buffers) -------- */
+/* ---- in-memory MREADER (so MikMod can load WAVs from embedded buffers) ---- */
 typedef struct { MREADER core; const unsigned char *data; long size; long pos; } MemReader;
 
 static BOOL mr_eof(MREADER *r)  { MemReader *m = (MemReader *)r; return m->pos >= m->size; }
@@ -77,84 +73,11 @@ static void mem_reader_init(MemReader *m, const void *data, long size)
 	m->data = (const unsigned char *)data; m->size = size; m->pos = 0;
 }
 
-/* ---- SFX synthesis: build a mono 16-bit PCM WAV in memory, load as SAMPLE -- */
-#define SR 22050
-static short         synth_buf[SR / 2];                  /* up to 0.5 s        */
-static unsigned char wav_buf[44 + sizeof(synth_buf)];
-
-static void put_u16le(unsigned char *b, unsigned v) { b[0] = v & 0xFF; b[1] = (v >> 8) & 0xFF; }
-static void put_u32le(unsigned char *b, unsigned v)
-{ b[0] = v & 0xFF; b[1] = (v >> 8) & 0xFF; b[2] = (v >> 16) & 0xFF; b[3] = (v >> 24) & 0xFF; }
-
-/* WAV is little-endian by spec; emit bytes explicitly (PPU is big-endian). */
-static long make_wav(int nsamples, int rate)
-{
-	long data_bytes = (long)nsamples * 2;
-	memcpy(wav_buf, "RIFF", 4);          put_u32le(wav_buf + 4, 36 + data_bytes);
-	memcpy(wav_buf + 8, "WAVE", 4);
-	memcpy(wav_buf + 12, "fmt ", 4);     put_u32le(wav_buf + 16, 16);
-	put_u16le(wav_buf + 20, 1);          /* PCM   */
-	put_u16le(wav_buf + 22, 1);          /* mono  */
-	put_u32le(wav_buf + 24, rate);
-	put_u32le(wav_buf + 28, rate * 2);   /* byte rate  */
-	put_u16le(wav_buf + 32, 2);          /* block align*/
-	put_u16le(wav_buf + 34, 16);         /* bits  */
-	memcpy(wav_buf + 36, "data", 4);     put_u32le(wav_buf + 40, data_bytes);
-	for (int i = 0; i < nsamples; i++)
-		put_u16le(wav_buf + 44 + i * 2, (unsigned)((unsigned short)synth_buf[i]));
-	return 44 + data_bytes;
-}
-
-static SAMPLE *load_synth(int nsamples)
+static SAMPLE *load_sample(const void *data, long size)
 {
 	MemReader mr;
-	long len = make_wav(nsamples, SR);
-	mem_reader_init(&mr, wav_buf, len);
+	mem_reader_init(&mr, data, size);
 	return Sample_LoadGeneric(&mr.core);   /* may be NULL */
-}
-
-static unsigned rng = 0x1234567u;
-static float noisef(void)
-{
-	rng = rng * 1664525u + 1013904223u;
-	return ((float)((rng >> 9) & 0x7FFFFF) / 4194303.0f) - 1.0f;   /* -1..1 */
-}
-
-/* melee thud: low sine + a touch of noise, fast decay. */
-static SAMPLE *make_hit(void)
-{
-	int n = SR * 8 / 100;   /* 80 ms */
-	for (int i = 0; i < n; i++) {
-		float t = (float)i / SR, env = expf(-t * 22.0f);
-		float s = sinf(2.0f * (float)M_PI * 150.0f * t) * 0.7f + noisef() * 0.3f;
-		synth_buf[i] = (short)(env * s * 22000.0f);
-	}
-	return load_synth(n);
-}
-
-/* ki blast: descending sine sweep "pew". */
-static SAMPLE *make_blast(void)
-{
-	int n = SR * 18 / 100;  /* 180 ms */
-	float dur = (float)n / SR;
-	for (int i = 0; i < n; i++) {
-		float t = (float)i / SR, env = expf(-t * 9.0f);
-		float f = 900.0f - 700.0f * (t / dur);
-		synth_buf[i] = (short)(env * sinf(2.0f * (float)M_PI * f * t) * 22000.0f);
-	}
-	return load_synth(n);
-}
-
-/* explosion: noise burst + low rumble, exponential decay. */
-static SAMPLE *make_expl(void)
-{
-	int n = SR * 35 / 100;  /* 350 ms */
-	for (int i = 0; i < n; i++) {
-		float t = (float)i / SR, env = expf(-t * 7.0f);
-		float s = noisef() * 0.8f + sinf(2.0f * (float)M_PI * 70.0f * t) * 0.3f;
-		synth_buf[i] = (short)(env * s * 23000.0f);
-	}
-	return load_synth(n);
 }
 
 /* ---- public API ---------------------------------------------------------- */
@@ -169,21 +92,22 @@ void audio_init(void)
 	md_mixfreq = 48000;
 
 	if (MikMod_Init("")) return;             /* stays silent on failure */
-	MikMod_SetNumVoices(-1, 8);              /* reserve voices for SFX  */
+	MikMod_SetNumVoices(0, 16);              /* all voices for samples (music + sfx) */
 	if (MikMod_EnableOutput()) { MikMod_Exit(); return; }
 
-	MemReader mr;
-	mem_reader_init(&mr, battle_s3m, (long)battle_s3m_size);
-	music = Player_LoadGeneric(&mr.core, 64, 0);
-	if (music) {
-		music->wrap = 1;                     /* loop the module forever */
-		Player_SetVolume(100);
-		Player_Start(music);
-	}
+	sfx_hit   = load_sample(sfx_hit_bin,   (long)sfx_hit_bin_size);
+	sfx_blast = load_sample(sfx_blast_bin, (long)sfx_blast_bin_size);
+	sfx_expl  = load_sample(sfx_expl_bin,  (long)sfx_expl_bin_size);
 
-	sfx_hit   = make_hit();
-	sfx_blast = make_blast();
-	sfx_expl  = make_expl();
+	music = load_sample(music_bin, (long)music_bin_size);
+	if (music) {
+		music->flags |= SF_LOOP;
+		music->loopstart = 0;
+		music->loopend = music->length;
+		/* SFX_CRITICAL keeps the looping music voice from being stolen by SFX. */
+		music_voice = Sample_Play(music, 0, SFX_CRITICAL);
+		if (music_voice >= 0) Voice_SetVolume(music_voice, 150);  /* duck under SFX */
+	}
 
 	audio_ok = 1;
 }
@@ -197,8 +121,8 @@ void audio_shutdown(void)
 {
 	if (!audio_ok) return;
 	audio_ok = 0;
-	Player_Stop();
-	if (music) { Player_Free(music); music = NULL; }
+	if (music_voice >= 0) Voice_Stop(music_voice);
+	if (music)     Sample_Free(music);
 	if (sfx_hit)   Sample_Free(sfx_hit);
 	if (sfx_blast) Sample_Free(sfx_blast);
 	if (sfx_expl)  Sample_Free(sfx_expl);
