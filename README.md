@@ -2,19 +2,23 @@
 
 A PlayStation 3 homebrew port of **Power of Pong** — a Dragon Ball-style 1v1
 arena fighter that mixes pong/paddle mechanics with charged **ki** energy blasts.
-Two fighters trade paddle strikes and launch projectiles at three power levels,
-draining each other's health bar across best-of-three rounds, with a CPU opponent
-driven by a small finite-state machine.
+Two fighters trade paddle strikes and launch ki blasts at three power levels in a
+**power tug-of-war** (fill your bar to win the round), with a CPU opponent driven by
+a finite-state machine.
 
 The original is a Unity 2018 game (`powerofpong`); this repo re-implements it from
 scratch in C on the PSL1GHT SDK, following the conventions of
 [02900/ps3-homebrew-template](https://github.com/02900/ps3-homebrew-template) and
 [02900/ps3-remote-play](https://github.com/02900/ps3-remote-play).
 
-> ## 🚧 Status: scaffold
-> This repo currently contains **only the project skeleton and the migration
-> roadmap** — it is **not yet playable**. `source/main.c` is a placeholder. The
-> step-by-step port plan lives in **[todo/ROADMAP.md](todo/ROADMAP.md)**.
+> ## ✅ Status: playable
+> A full game loop: **mode menu → character select → fight → result → menu**. Three
+> modes (Battle / Tournament / Mission), the **30-fighter roster** with per-character
+> art and power, **7 arenas**, original music + SFX, 1P-vs-CPU or 2-pad local play, and
+> an installable **PKG** for the XMB. See **[todo/ROADMAP.md](todo/ROADMAP.md)** for the
+> phase-by-phase history and remaining polish.
+
+![Ki Blast Arena icon](pkgfiles/ICON0.PNG)
 
 ---
 
@@ -63,6 +67,23 @@ PS3_IP=192.168.1.13 ./scripts/deploy.sh
 The `--network host` flag (set inside the script) lets the container reach the PS3
 on your LAN — without it the loader receives the file but never launches it.
 
+## Install on the PS3 (PKG, runs from the XMB)
+
+Build an installable package:
+
+```bash
+./scripts/build.sh pkg          # or: docker run ... ghcr.io/02900/ps3-toolchain make pkg
+```
+
+This produces **`src.pkg`** in the project root (a self-contained NPDRM package — all
+art, audio and code are embedded, no extra files needed). To install on a PS3 with CFW/HEN:
+
+1. Copy `src.pkg` to the console (USB stick, or FTP to `/dev_hdd0/`).
+2. On the PS3, open **Package Manager → Install Package Files** and pick `src.pkg`.
+3. Launch **Ki Blast Arena** from the XMB (Game column). The icon is `pkgfiles/ICON0.PNG`.
+
+> The package's `TITLE_ID` is `KIBLASTAR` and the title is set in `sfo.xml`.
+
 ---
 
 ## Project structure
@@ -70,11 +91,11 @@ on your LAN — without it the loader receives the file but never launches it.
 ```
 ki-blast-arena/
 ├── .github/workflows/   # CI: build (via toolchain image) + docs link lint
-├── source/              # C game source (PPU) — main.c (stub for now)
+├── source/              # C game source (PPU) — main.c, audio.c, ttf_render.c
 ├── include/             # Shared headers
-├── data/                # Embedded assets (bin2o): sprites, audio modules
+├── data/                # Embedded assets (bin2o): character/arena art, audio
 ├── pkgfiles/            # Files bundled into the PKG (ICON0.PNG, assets/)
-├── extern/              # External deps (Clay UI submodule — added in Phase 1)
+├── extern/              # External deps (Clay UI submodule)
 ├── docs/api/            # Per-library API notes
 ├── scripts/             # Dockerized build.sh / deploy.sh wrappers
 ├── todo/                # → ROADMAP.md: the migration plan

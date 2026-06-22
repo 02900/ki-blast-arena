@@ -212,9 +212,20 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: backgrounds are flat 2D images (no 3D skybox/parallax); character representation
   stays as 2D sprite billboards (the chosen pipeline).
 
-### Phase 11 — Packaging & polish ⬜
-- `ICON0.PNG` / `PIC1.PNG`, `make pkg` for XMB install, performance pass, `docs/`.
-- **Exit criteria:** an installable PKG that runs from the XMB.
+### Phase 11 — Packaging & polish ✅
+- ✅ **`ICON0.PNG`**: a real game icon (320×176) composited from the game art (Goku SSGSS
+  on the Tournament arena + the title) with ImageMagick.
+- ✅ **`make pkg`** builds an installable, self-contained NPDRM package (`src.pkg`, ~9 MB,
+  TITLE_ID `KIBLASTAR`) — all art/audio/code is embedded, so no extra files are needed.
+  README documents the copy-to-PS3 → Package Manager → launch-from-XMB flow.
+- ✅ **Docs polished**: README status/structure/install updated; `docs/PATTERNS.md`,
+  `todo/ROADMAP.md` current.
+- ⬜ **Exit criteria — installable PKG runs from the XMB:** confirm on PS3/RPCS3 (the PKG
+  builds; on-console install/boot to be verified).
+- Note: `PIC1.PNG` (XMB background) isn't wired — the stock `ppu_rules` pkg recipe only
+  bundles ICON0 + EBOOT + PARAM.SFO. A real **performance pass** needs hardware (the main
+  risk is RSX texture memory: 30 sprites + 7 full-screen arenas load at startup; loads
+  are defensive so a failure degrades gracefully rather than crashing).
 
 ---
 
