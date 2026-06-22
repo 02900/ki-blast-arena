@@ -64,19 +64,18 @@
 #define FIGHTER_HALF_X (FIGHTER_W * 0.5f)
 #define FIGHTER_HALF_Z 0.0f
 
-/* Combat model (BalanceOfPower.cs). */
-#define LEVEL_POWER   5.0f
+/* Combat model (BalanceOfPower.cs). Each fighter's strength comes from its
+ * selected character's levelPower (1..10); see p1_power / p2_power. */
+#define DEFAULT_POWER 5.0f
 #define BAL_MAX       100.0f
 #define BAL_START     50.0f
 #define KI_MAX        100.0f
 #define KI_MIN        1.0f
 #define KI_START      35.0f
-#define MELEE_DMG     (1.5f * LEVEL_POWER)
-#define MELEE_RANGE   3.4f      /* center-to-center XZ contact distance */
 #define MELEE_KIGAIN  7.0f
+#define MELEE_RANGE   3.4f      /* center-to-center XZ contact distance */
 #define MELEE_CD      14        /* frames between melee hits */
 #define KNOCKBACK     1.6f      /* world units pushed on hit */
-#define ROUND_WINS    3         /* first to this many round wins = match */
 #define ROUND_BANNER  110       /* frames the round-over banner shows */
 #define FRAME_DT      (1.0f / 60.0f)
 
@@ -101,10 +100,8 @@
 #define EXPL_KNOCK_RADIUS 5.0f
 #define EXPL_KNOCK_FORCE  2.2f   /* max world units pushed at the blast centre */
 
-/* CPU AI (CPUController.cs / FMS.cs). Difficulty scales with LEVEL_POWER (1..10). */
-#define CPU_SHOOT_RATE (0.9f - LEVEL_POWER / 75.0f)    /* sec between blasts  */
-#define CPU_PUNCH_RATE (0.20f - LEVEL_POWER / 100.0f)  /* sec between melees  */
-#define CPU_SPEED_BASE (10.0f + LEVEL_POWER / 2.0f)    /* world units/second  */
+/* CPU AI (CPUController.cs / FMS.cs). Difficulty scales with the CPU's character
+ * power (p2_power); the rates are computed at runtime (see cpu_*_rate below). */
 #define CPU_SIGHT      10.0f                           /* chase within this   */
 
 #define STICK_DEAD    32
@@ -115,7 +112,6 @@
 #define CAM_CY (SCREEN_HEIGHT / 2.0f)
 
 static int running = 1;
-static padInfo pad_info;
 static u32 *ttf_texture = NULL;
 
 /* Camera basis. */
@@ -156,6 +152,63 @@ static int   cpu_destpoint;
 static float cpu_destx, cpu_destz;
 static float cpu_shoot_t, cpu_punch_t, cpu_charge_t;
 static const float patrol_pts[4][2] = { { 8, 4 }, { -8, 4 }, { -8, -4 }, { 8, -4 } };
+
+/* --- characters, modes, app flow ----------------------------------------- */
+/* The 30-fighter roster (names from the original prefabs; levelPower from the
+ * prefabs where extractable, interpolated on the same rising curve elsewhere). */
+typedef struct { const char *name; float power; } Character;
+static const Character roster[30] = {
+	{ "Goku Inicio", 1.0f },        { "Piccolo Inicio", 1.0f },   { "Kid Gohan", 1.1f },
+	{ "Vegeta Inicio", 1.6f },      { "Freezer Forma 1", 2.0f },  { "Freeze Forma 2", 2.4f },
+	{ "Piccolo Nail", 2.5f },       { "Vegeta Namek", 2.7f },     { "Freezer Forma 4", 2.9f },
+	{ "Goku SS", 3.1f },            { "Piccolo End", 3.2f },      { "Cell Forma 1", 3.3f },
+	{ "Cell Foma 2", 3.4f },        { "Super Vegeta", 3.6f },     { "Cell Foma Perfecta", 3.9f },
+	{ "Joven Gohan SS 2", 4.3f },   { "Goku SS2", 4.6f },         { "Majin Vegeta", 4.9f },
+	{ "Super Buu", 5.1f },          { "Gohan Definitivo", 5.2f }, { "Kid Buu", 5.3f },
+	{ "Goku SS3", 5.4f },           { "Goku End", 5.7f },         { "Vegeta End", 6.2f },
+	{ "Bills", 6.8f },              { "Goku SSG", 7.3f },         { "Goku SSGSS", 7.6f },
+	{ "Golden Freezer", 7.8f },     { "Vegeta SSGSS", 8.2f },     { "Whis", 8.6f },
+};
+#define ROSTER_N 30
+
+/* Per-fighter strength (from the chosen character). */
+static float p1_power = DEFAULT_POWER, p2_power = DEFAULT_POWER;
+static int   p1_char = 0, p2_char = ROSTER_N - 1;
+
+/* Modes (instancePrefabs.cs flags). */
+enum { MODE_BATTLE, MODE_TOURNAMENT, MODE_MISSION };
+static int mode = MODE_BATTLE;
+static int round_target = 1;     /* round wins to take the match (Battle 1, Tour 3) */
+static int p2_is_cpu = 1;
+
+/* App flow. */
+enum { APP_MENU, APP_CHARSEL, APP_FIGHT };
+static int app_state = APP_MENU;
+static int menu_sel = 0;         /* mode-menu cursor   */
+static int sel_cursor = 0;       /* character grid cursor */
+static int sel_phase = 0;        /* 0 = picking P1, 1 = picking P2 */
+
+/* Missions: a fixed enemy (and a flavour title) per mission. */
+typedef struct { const char *title; int enemy; } Mission;
+static const Mission missions[5] = {
+	{ "Saiyan Saga",   3 },   /* vs Vegeta Inicio   */
+	{ "Namek",         8 },   /* vs Freezer Forma 4 */
+	{ "Android/Cell",  14 },  /* vs Cell Perfecta   */
+	{ "Majin Buu",     20 },  /* vs Kid Buu         */
+	{ "Gods",          29 },  /* vs Whis            */
+};
+#define MISSION_N 5
+static int mission_sel = 0;
+
+/* --- unified pad polling (shared by all app states) ----------------------- */
+enum {
+	PB_UP = 1u, PB_DOWN = 2u, PB_LEFT = 4u, PB_RIGHT = 8u,
+	PB_CROSS = 16u, PB_CIRCLE = 32u, PB_SQUARE = 64u,
+	PB_START = 128u, PB_SELECT = 256u, PB_L1 = 512u, PB_R1 = 1024u
+};
+static padData g_pd[2];      /* retained current pad state */
+static int     g_conn[2];
+static u32     g_pressed[2]; /* edge bits this frame       */
 
 static void sys_callback(u64 status, u64 param, void *userdata)
 {
@@ -248,9 +301,9 @@ static void read_move(const padData *pd, float *mx, float *mz)
 }
 
 /* SimpleController translation + PongPaddle clamp. Returns 1 if it moved. */
-static int move_fighter(float *x, float *z, float mx, float mz, float ki)
+static int move_fighter(float *x, float *z, float mx, float mz, float ki, float power)
 {
-	const float moveSpeed = 0.2f + LEVEL_POWER / 50.0f;
+	const float moveSpeed = 0.2f + power / 50.0f;
 	const float step = moveSpeed + (moveSpeed * 0.5f * ki / 100.0f);
 	*x += mx * step;
 	*z += mz * step;
@@ -310,12 +363,12 @@ static void explosion_knockback(float ex, float ez)
 static void melee(int by_p1)
 {
 	if (by_p1) {
-		balance += MELEE_DMG;
+		balance += 1.5f * p1_power;
 		ki1 += MELEE_KIGAIN; clampf(&ki1, KI_MIN, KI_MAX);
 		knockback(&f2x, &f2z, f1x, f1z);
 		melee_cd1 = MELEE_CD;
 	} else {
-		balance -= MELEE_DMG;
+		balance -= 1.5f * p2_power;
 		ki2 += MELEE_KIGAIN; clampf(&ki2, KI_MIN, KI_MAX);
 		knockback(&f1x, &f1z, f2x, f2z);
 		melee_cd2 = MELEE_CD;
@@ -394,7 +447,8 @@ static void update_effects(void)
 		float oz = (b->owner == 1) ? f2z : f1z;
 		float dx = b->x - ox, dz = b->z - oz;
 		if (dx*dx + dz*dz <= BLAST_HIT * BLAST_HIT) {
-			float amount = BLAST_DMGBASE * (b->tier + 1) + LEVEL_POWER * 1.25f;
+			float opw = (b->owner == 1) ? p1_power : p2_power;
+			float amount = BLAST_DMGBASE * (b->tier + 1) + opw * 1.25f;
 			if (b->owner == 1) balance += amount; else balance -= amount;
 			explosion_knockback(b->x, b->z);   /* OverlapSphere shove on impact */
 			b->active = 0;
@@ -437,13 +491,19 @@ static void charge_ki_cpu(void)
 	clampf(&ki2, KI_MIN, KI_MAX);
 }
 
+/* CPU difficulty rates from its character power (CPUController.Initialize). */
+static float cpu_shoot_rate(void) { return 0.9f - p2_power / 75.0f; }
+static float cpu_punch_rate(void) { return 0.20f - p2_power / 100.0f; }
+static float cpu_speed_base(void) { return 10.0f + p2_power / 2.0f; }
+
 /* Seek the current destination at the ki-scaled CPU speed (stops within 0.5). */
 static void cpu_move(void)
 {
 	float dx = cpu_destx - f2x, dz = cpu_destz - f2z;
 	float d = sqrtf(dx*dx + dz*dz);
 	if (d <= 0.5f) { moving2 = 0; return; }
-	float speed = (CPU_SPEED_BASE + CPU_SPEED_BASE * 0.5f * ki2 / 100.0f) * FRAME_DT;
+	float base = cpu_speed_base();
+	float speed = (base + base * 0.5f * ki2 / 100.0f) * FRAME_DT;
 	float step = (speed < d) ? speed : d;
 	f2x += dx / d * step;
 	f2z += dz / d * step;
@@ -472,7 +532,7 @@ static void cpu_update(void)
 		else if (dist > CPU_SIGHT) { cpu_goto_next_point(); cpu_state = CPU_PATROL; }
 		else if (dist >= 4.0f && dist <= 9.0f && (rand() % 1000) < 14)
 			cpu_state = CPU_CHARGE;                       /* occasionally retreat to charge */
-		if (cpu_shoot_t >= CPU_SHOOT_RATE) { try_fire(2); cpu_shoot_t = 0.0f; }
+		if (cpu_shoot_t >= cpu_shoot_rate()) { try_fire(2); cpu_shoot_t = 0.0f; }
 		break;
 	case CPU_CHARGE:
 		cpu_destx = -f1x; cpu_destz = -f1z;               /* retreat to the mirror point */
@@ -489,7 +549,7 @@ static void cpu_update(void)
 	cpu_move();
 
 	/* Auto-melee on contact (BalanceOfPower.OnTriggerStay, CPU branch). */
-	if (fighters_in_contact() && cpu_punch_t >= CPU_PUNCH_RATE) {
+	if (fighters_in_contact() && cpu_punch_t >= cpu_punch_rate()) {
 		melee(0);
 		cpu_punch_t = 0.0f;
 	}
@@ -519,8 +579,8 @@ static void reset_match(void)
 
 static void end_round(void)
 {
-	if (score1 >= ROUND_WINS || score2 >= ROUND_WINS) {
-		match_winner = (score1 >= ROUND_WINS) ? 1 : 2;
+	if (score1 >= round_target || score2 >= round_target) {
+		match_winner = (score1 >= round_target) ? 1 : 2;
 		gstate = GS_MATCH;
 	} else {
 		gstate = GS_ROUND;
@@ -528,112 +588,199 @@ static void end_round(void)
 	}
 }
 
-/* --- per-frame game update ------------------------------------------------ */
-/* Edge state per pad: bit0 = Square (melee), bit1 = Start, bit2 = Circle (blast). */
-#define BTN_SQ 1u
-#define BTN_ST 2u
-#define BTN_CI 4u
-
-/* Returns 0 to request quit. */
-static int update_game(void)
+/* --- unified pad poll (retain-last packet; shared by every app state) ------ */
+static void poll_pads(void)
 {
+	static padData held[2];
 	static u32 prev[2] = { 0, 0 };
-	static padData held[2];   /* last good packet per port (persists across frames) */
-	padData pd[2];
-	int conn[2] = { 0, 0 };
-
-	ioPadGetInfo(&pad_info);
+	padInfo info;
+	ioPadGetInfo(&info);
 	for (int i = 0; i < 2; i++) {
-		/* ioPadGetData sets len = 0 on frames with NO new data (e.g. a button held
-		 * while the sticks are still). Using that frame as-is would read the held
-		 * button as released and stall ki charging. So refresh our retained state
-		 * only on a fresh packet (len > 0) and reuse it otherwise; a held input
-		 * stays held. Zero-init avoids stack garbage from a phantom port. */
 		padData tmp;
 		memset(&tmp, 0, sizeof(tmp));
-		if (pad_info.status[i] && ioPadGetData(i, &tmp) == 0) {
-			conn[i] = 1;
-			if (tmp.len > 0) held[i] = tmp;   /* fresh data: remember it */
-			pd[i] = held[i];                  /* else reuse last known state */
+		if (info.status[i] && ioPadGetData(i, &tmp) == 0) {
+			g_conn[i] = 1;
+			if (tmp.len > 0) held[i] = tmp;   /* refresh only on fresh data */
+			g_pd[i] = held[i];
 		} else {
-			conn[i] = 0;
-			memset(&held[i], 0, sizeof(held[i]));   /* forget on disconnect */
-			memset(&pd[i], 0, sizeof(pd[i]));
+			g_conn[i] = 0;
+			memset(&held[i], 0, sizeof(held[i]));
+			memset(&g_pd[i], 0, sizeof(g_pd[i]));
+		}
+		padData *p = &g_pd[i];
+		u32 cur = 0;
+		if (g_conn[i]) {
+			if (p->BTN_UP)     cur |= PB_UP;
+			if (p->BTN_DOWN)   cur |= PB_DOWN;
+			if (p->BTN_LEFT)   cur |= PB_LEFT;
+			if (p->BTN_RIGHT)  cur |= PB_RIGHT;
+			if (p->BTN_CROSS)  cur |= PB_CROSS;
+			if (p->BTN_CIRCLE) cur |= PB_CIRCLE;
+			if (p->BTN_SQUARE) cur |= PB_SQUARE;
+			if (p->BTN_START)  cur |= PB_START;
+			if (p->BTN_SELECT) cur |= PB_SELECT;
+			if (p->BTN_L1)     cur |= PB_L1;
+			if (p->BTN_R1)     cur |= PB_R1;
+		}
+		g_pressed[i] = cur & ~prev[i];
+		prev[i] = cur;
+	}
+	p1_conn = g_conn[0];
+	p2_conn = g_conn[1];
+}
+
+/* True if Select+Start is held on either pad (quit to XMB). */
+static int quit_combo(void)
+{
+	for (int i = 0; i < 2; i++)
+		if (g_conn[i] && g_pd[i].BTN_SELECT && g_pd[i].BTN_START) return 1;
+	return 0;
+}
+
+/* Menu navigation edges from pad 0 (D-pad + left stick), with auto-centering. */
+static u32 nav_edges(void)
+{
+	u32 e = g_pressed[0] & (PB_UP | PB_DOWN | PB_LEFT | PB_RIGHT);
+	/* fold the left stick into discrete edges */
+	static int sx = 0, sz = 0;
+	int nx = 0, nz = 0;
+	if (g_conn[0] && !(g_pd[0].ANA_L_H == 0 && g_pd[0].ANA_L_V == 0)) {
+		int h = (int)g_pd[0].ANA_L_H - 128, v = (int)g_pd[0].ANA_L_V - 128;
+		if (h < -48) nx = -1; else if (h > 48) nx = 1;
+		if (v < -48) nz = -1; else if (v > 48) nz = 1;
+	}
+	if (nx == -1 && sx != -1) e |= PB_LEFT;
+	if (nx ==  1 && sx !=  1) e |= PB_RIGHT;
+	if (nz == -1 && sz != -1) e |= PB_UP;
+	if (nz ==  1 && sz !=  1) e |= PB_DOWN;
+	sx = nx; sz = nz;
+	return e;
+}
+
+/* Configure and enter a match for the chosen mode. */
+static void start_fight(void)
+{
+	p1_power = roster[p1_char].power;
+	p2_power = roster[p2_char].power;
+	if (mode == MODE_TOURNAMENT)   round_target = 3;
+	else                           round_target = 1;   /* Battle / Mission */
+	/* P2 is human only in Battle with a second pad; otherwise it's the CPU. */
+	p2_is_cpu = !(mode == MODE_BATTLE && p2_conn);
+	reset_match();
+	app_state = APP_FIGHT;
+}
+
+/* Mode-select menu (StartOptions.cs). */
+static void update_menu(void)
+{
+	u32 e = nav_edges();
+	if (e & PB_UP)   menu_sel = (menu_sel + 3) % 4;
+	if (e & PB_DOWN) menu_sel = (menu_sel + 1) % 4;
+	if (g_pressed[0] & PB_CROSS) {
+		switch (menu_sel) {
+		case 0: mode = MODE_BATTLE;     sel_phase = 0; app_state = APP_CHARSEL; break;
+		case 1: mode = MODE_TOURNAMENT; sel_phase = 0; app_state = APP_CHARSEL; break;
+		case 2: mode = MODE_MISSION;    sel_phase = 0; app_state = APP_CHARSEL; break;
+		case 3: running = 0; break;   /* Quit */
 		}
 	}
-	p1_conn = conn[0];
-	p2_conn = conn[1];
+}
 
-	/* Quit: Select+Start on either pad. */
-	for (int i = 0; i < 2; i++)
-		if (conn[i] && pd[i].BTN_SELECT && pd[i].BTN_START) return 0;
-
-	/* Per-pad edge detection (Square + Start). */
-	u32 pressed_sq[2] = { 0, 0 };
-	u32 pressed_blast[2] = { 0, 0 };
-	u32 pressed_start = 0;
-	for (int i = 0; i < 2; i++) {
-		u32 cur = 0;
-		if (conn[i]) cur = (pd[i].BTN_SQUARE ? BTN_SQ : 0u)
-		                 | (pd[i].BTN_START  ? BTN_ST : 0u)
-		                 | (pd[i].BTN_CIRCLE ? BTN_CI : 0u);
-		u32 p = cur & ~prev[i];
-		prev[i] = cur;
-		pressed_sq[i] = p & BTN_SQ;
-		pressed_blast[i] = p & BTN_CI;
-		pressed_start |= (p & BTN_ST);
+/* Character grid select (SelectCharacters.cs / ChooseYourPlayer.cs). */
+static void update_charsel(void)
+{
+	u32 e = nav_edges();
+	/* In Mission mode, L1/R1 cycle which mission (fixed enemy) to play. */
+	if (mode == MODE_MISSION && sel_phase == 0) {
+		if (g_pressed[0] & PB_L1) mission_sel = (mission_sel + MISSION_N - 1) % MISSION_N;
+		if (g_pressed[0] & PB_R1) mission_sel = (mission_sel + 1) % MISSION_N;
 	}
+	if (e & PB_LEFT)  sel_cursor = (sel_cursor + ROSTER_N - 1) % ROSTER_N;
+	if (e & PB_RIGHT) sel_cursor = (sel_cursor + 1) % ROSTER_N;
+	if (e & PB_UP)    sel_cursor = (sel_cursor + ROSTER_N - 10) % ROSTER_N;
+	if (e & PB_DOWN)  sel_cursor = (sel_cursor + 10) % ROSTER_N;
+
+	if (g_pressed[0] & PB_CIRCLE) {   /* back */
+		if (sel_phase == 1) sel_phase = 0;
+		else app_state = APP_MENU;
+		return;
+	}
+	if (g_pressed[0] & PB_CROSS) {
+		if (sel_phase == 0) {
+			p1_char = sel_cursor;
+			if (mode == MODE_BATTLE) { sel_phase = 1; }       /* pick P2 next */
+			else if (mode == MODE_TOURNAMENT) {
+				p2_char = rand() % ROSTER_N; start_fight();   /* random opponent */
+			} else { /* MODE_MISSION */
+				p2_char = missions[mission_sel].enemy; start_fight();
+			}
+		} else {
+			p2_char = sel_cursor;
+			start_fight();
+		}
+	}
+}
+
+/* --- per-frame fight update (APP_FIGHT) ----------------------------------- */
+/* Pads are already polled (poll_pads) into g_pd / g_conn / g_pressed. */
+static void update_game(void)
+{
+	u32 sq1 = g_pressed[0] & PB_SQUARE, sq2 = g_pressed[1] & PB_SQUARE;
+	u32 bl1 = g_pressed[0] & PB_CIRCLE, bl2 = g_pressed[1] & PB_CIRCLE;
+	u32 start = (g_pressed[0] | g_pressed[1]) & PB_START;
 
 	if (melee_cd1 > 0) melee_cd1--;
 	if (melee_cd2 > 0) melee_cd2--;
 
 	if (gstate == GS_ROUND) {
 		if (--banner_timer <= 0) reset_round();
-		return 1;
+		return;
 	}
 	if (gstate == GS_MATCH) {
-		if (pressed_start) reset_match();
-		return 1;
+		if (start) app_state = APP_MENU;          /* result -> back to menu */
+		return;
 	}
 
 	/* GS_FIGHT */
-	if (pressed_start) paused = !paused;
-	if (paused) { moving1 = moving2 = charging1 = charging2 = 0; return 1; }
+	if (start) paused = !paused;
+	if (paused) {
+		if (g_pressed[0] & PB_CIRCLE) { paused = 0; app_state = APP_MENU; }  /* quit to menu */
+		moving1 = moving2 = charging1 = charging2 = 0;
+		return;
+	}
 
-	/* Fighter 1: always the human on pad 0. */
+	/* Fighter 1: human on pad 0. */
 	float m1x = 0.0f, m1z = 0.0f;
-	if (conn[0]) read_move(&pd[0], &m1x, &m1z);
-	moving1 = move_fighter(&f1x, &f1z, m1x, m1z, ki1);
-	charging1 = (conn[0] && pd[0].BTN_CROSS) ? 1 : 0;
+	if (g_conn[0]) read_move(&g_pd[0], &m1x, &m1z);
+	moving1 = move_fighter(&f1x, &f1z, m1x, m1z, ki1, p1_power);
+	charging1 = (g_conn[0] && g_pd[0].BTN_CROSS) ? 1 : 0;
 	charge_ki(&ki1, charging1, moving1);
 
-	/* Fighter 2: human on pad 1, or the CPU AI when no second controller. */
-	if (p2_conn) {
+	/* Fighter 2: human on pad 1 (Battle 2P) or the CPU. */
+	if (!p2_is_cpu && g_conn[1]) {
 		float m2x = 0.0f, m2z = 0.0f;
-		read_move(&pd[1], &m2x, &m2z);
-		moving2 = move_fighter(&f2x, &f2z, m2x, m2z, ki2);
-		charging2 = pd[1].BTN_CROSS ? 1 : 0;
+		read_move(&g_pd[1], &m2x, &m2z);
+		moving2 = move_fighter(&f2x, &f2z, m2x, m2z, ki2, p2_power);
+		charging2 = g_pd[1].BTN_CROSS ? 1 : 0;
 		charge_ki(&ki2, charging2, moving2);
 	} else {
-		cpu_update();   /* drives f2: move, charge, blasts, melee */
+		cpu_update();
 	}
 
 	/* Melee on contact (edge-triggered, cooldown-gated). */
 	if (fighters_in_contact()) {
-		if (pressed_sq[0] && melee_cd1 == 0) melee(1);
-		if (pressed_sq[1] && melee_cd2 == 0) melee(0);
+		if (sq1 && melee_cd1 == 0) melee(1);
+		if (!p2_is_cpu && sq2 && melee_cd2 == 0) melee(0);
 	}
 
 	/* Ki blasts (Circle), then advance all projectiles/explosions. */
-	if (pressed_blast[0]) try_fire(1);
-	if (pressed_blast[1]) try_fire(2);
+	if (bl1) try_fire(1);
+	if (!p2_is_cpu && bl2) try_fire(2);
 	update_effects();
 
 	/* Round end: someone filled the balance bar. */
 	if (balance >= BAL_MAX) { balance = BAL_MAX; round_winner = 1; score1++; end_round(); }
 	else if (balance <= 0.0f) { balance = 0.0f; round_winner = 2; score2++; end_round(); }
-
-	return 1;
 }
 
 /* --- rendering ------------------------------------------------------------ */
@@ -820,14 +967,18 @@ static void draw_hud(void)
 	/* Score, round/match result panels and PAUSED are drawn by the Clay UI
 	 * overlay (build_and_render_ui) — see Phase 6. */
 
-	/* Controller presence: P1 needs a pad; P2 is the CPU when pad 2 is absent. */
+	/* Fighter names (P1 left, P2 right, with a CPU tag). */
+	display_ttf_string(28, 52, roster[p1_char].name, COLOR_P1, 0, 12, 16);
+	{
+		char nm[48];
+		snprintf(nm, sizeof nm, "%s%s", roster[p2_char].name, p2_is_cpu ? " (CPU)" : "");
+		display_ttf_string(SCREEN_WIDTH - 28 - text_w(nm, 12, 16), 52, nm, COLOR_P2, 0, 12, 16);
+	}
 	if (!p1_conn)
 		centered(150, "Connect controller 1 (P1)", COLOR_P1, 16, 22);
-	if (!p2_conn)
-		display_ttf_string(SCREEN_WIDTH - 92, 52, "P2: CPU", COLOR_P2, 0, 12, 16);
 
 	display_ttf_string(28, SCREEN_HEIGHT - 28,
-		"KI BLAST ARENA - P7 | P1=pad1  P2=pad2 or CPU | move | hold X charge | O blast | Square melee | Start pause",
+		"move | hold X charge | O blast | Square melee | Start pause (O quit to menu) | Sel+Start exit",
 		COLOR_GRAY, 0, 10, 14);
 }
 
@@ -911,11 +1062,17 @@ static void build_and_render_ui(void)
 			}
 		} else if (show_pause) {
 			CLAY(CLAY_ID("PausePanel"), {
-				.layout = { .padding = CLAY_PADDING_ALL(24), .childAlignment = { .x = CLAY_ALIGN_X_CENTER } },
+				.layout = {
+					.padding = CLAY_PADDING_ALL(24), .childGap = 10,
+					.layoutDirection = CLAY_TOP_TO_BOTTOM,
+					.childAlignment = { .x = CLAY_ALIGN_X_CENTER }
+				},
 				.backgroundColor = panbg,
 				.border = { .color = white, .width = CLAY_BORDER_OUTSIDE(2) }
 			}) {
 				CLAY_TEXT(CLAY_STRING("PAUSED"), CLAY_TEXT_CONFIG({ .textColor = white, .fontSize = 30 }));
+				CLAY_TEXT(CLAY_STRING("Start: resume    O: quit to menu"),
+				          CLAY_TEXT_CONFIG({ .textColor = dim, .fontSize = 16 }));
 			}
 		}
 
@@ -926,11 +1083,130 @@ static void build_and_render_ui(void)
 	clay_render(cmds);
 }
 
+/* Arena floor + two idle fighters, used as the menu / select backdrop. */
+static void draw_backdrop(void)
+{
+	floor_quad();
+	floor_grid();
+	draw_fighter(-9.0f, 0.0f, COLOR_P1, 0);
+	draw_fighter( 9.0f, 0.0f, COLOR_P2, 0);
+}
+
+/* Mode-select menu (Clay). */
+static void render_menu(void)
+{
+	static const char *items[4] = { "BATTLE", "TOURNAMENT", "MISSION", "QUIT" };
+	const Clay_Color white = { 255, 255, 255, 255 }, dim = { 160, 160, 160, 255 };
+	const Clay_Color orange = { 255, 136, 0, 255 }, rowc = { 40, 60, 84, 255 };
+	const Clay_Color rowf = { 64, 92, 128, 255 }, focus = { 255, 200, 50, 255 };
+
+	Clay_SetLayoutDimensions((Clay_Dimensions){ SCREEN_WIDTH, SCREEN_HEIGHT });
+	Clay_BeginLayout();
+	CLAY(CLAY_ID("MenuRoot"), {
+		.layout = {
+			.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+			.padding = CLAY_PADDING_ALL(40), .childGap = 14,
+			.layoutDirection = CLAY_TOP_TO_BOTTOM, .childAlignment = { .x = CLAY_ALIGN_X_CENTER }
+		}
+	}) {
+		CLAY_TEXT(CLAY_STRING("KI BLAST ARENA"), CLAY_TEXT_CONFIG({ .textColor = orange, .fontSize = 40 }));
+		CLAY_TEXT(CLAY_STRING("Select a mode"), CLAY_TEXT_CONFIG({ .textColor = dim, .fontSize = 16 }));
+		CLAY(CLAY_ID("MSpc"), { .layout = { .sizing = { CLAY_SIZING_FIXED(0), CLAY_SIZING_FIXED(12) } } }) {}
+		for (int i = 0; i < 4; i++) {
+			int f = (i == menu_sel);
+			CLAY(CLAY_IDI("MItem", i), {
+				.layout = {
+					.sizing = { CLAY_SIZING_FIXED(360), CLAY_SIZING_FIXED(46) },
+					.padding = { 20, 20, 8, 8 }, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER }
+				},
+				.backgroundColor = f ? rowf : rowc,
+				.border = { .color = focus, .width = CLAY_BORDER_OUTSIDE(f ? 3 : 0) }
+			}) {
+				CLAY_TEXT(clay_str(items[i]), CLAY_TEXT_CONFIG({ .textColor = white, .fontSize = 24 }));
+			}
+		}
+		CLAY(CLAY_ID("MSpc2"), { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } } }) {}
+		CLAY_TEXT(CLAY_STRING("D-pad: move    X: select    Select+Start: exit"),
+		          CLAY_TEXT_CONFIG({ .textColor = dim, .fontSize = 14 }));
+	}
+	clay_render(Clay_EndLayout(0.0f));
+}
+
+/* Character grid select (Clay). */
+static void render_charsel(void)
+{
+	static char cellnames[ROSTER_N][3];
+	static int cellnames_ready = 0;
+	static char title[24], info[72], p1line[80], mline[112];
+
+	if (!cellnames_ready) {
+		for (int i = 0; i < ROSTER_N; i++) snprintf(cellnames[i], 3, "%02d", i);
+		cellnames_ready = 1;
+	}
+
+	const Clay_Color white = { 255, 255, 255, 255 }, dim = { 160, 160, 160, 255 };
+	const Clay_Color p1c = { 63, 169, 245, 255 }, p2c = { 245, 80, 63, 255 }, yellow = { 255, 210, 63, 255 };
+	const Clay_Color cell = { 30, 44, 60, 255 }, cellf = { 64, 92, 128, 255 }, focus = { 255, 200, 50, 255 };
+
+	const Character *c = &roster[sel_cursor];
+	Clay_Color hdr = (sel_phase == 0) ? p1c : p2c;
+	snprintf(title, sizeof title, "SELECT %s", sel_phase == 0 ? "P1" : "P2");
+	snprintf(info, sizeof info, "%02d  %s   -   PWR %.1f", sel_cursor, c->name, (double)c->power);
+	snprintf(p1line, sizeof p1line, "P1: %s", roster[p1_char].name);
+	const Mission *ms = &missions[mission_sel];
+	snprintf(mline, sizeof mline, "Mission %d/%d: %s   vs %s   (L1/R1)",
+	         mission_sel + 1, MISSION_N, ms->title, roster[ms->enemy].name);
+
+	Clay_SetLayoutDimensions((Clay_Dimensions){ SCREEN_WIDTH, SCREEN_HEIGHT });
+	Clay_BeginLayout();
+	CLAY(CLAY_ID("CSRoot"), {
+		.layout = {
+			.sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) },
+			.padding = CLAY_PADDING_ALL(22), .childGap = 12,
+			.layoutDirection = CLAY_TOP_TO_BOTTOM, .childAlignment = { .x = CLAY_ALIGN_X_CENTER }
+		}
+	}) {
+		CLAY_TEXT(clay_str(title), CLAY_TEXT_CONFIG({ .textColor = hdr, .fontSize = 28 }));
+
+		for (int r = 0; r < 3; r++) {
+			CLAY(CLAY_IDI("Row", r), { .layout = { .childGap = 6, .layoutDirection = CLAY_LEFT_TO_RIGHT } }) {
+				for (int col = 0; col < 10; col++) {
+					int idx = r * 10 + col;
+					int f = (idx == sel_cursor);
+					int isP1 = (sel_phase == 1 && idx == p1_char);
+					CLAY(CLAY_IDI("Cell", idx), {
+						.layout = {
+							.sizing = { CLAY_SIZING_FIXED(42), CLAY_SIZING_FIXED(34) },
+							.childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER }
+						},
+						.backgroundColor = f ? cellf : cell,
+						.border = { .color = isP1 ? p1c : focus, .width = CLAY_BORDER_OUTSIDE((f || isP1) ? 3 : 0) }
+					}) {
+						CLAY_TEXT(clay_str(cellnames[idx]),
+						          CLAY_TEXT_CONFIG({ .textColor = white, .fontSize = 18 }));
+					}
+				}
+			}
+		}
+
+		CLAY_TEXT(clay_str(info), CLAY_TEXT_CONFIG({ .textColor = white, .fontSize = 22 }));
+		if (sel_phase == 1)
+			CLAY_TEXT(clay_str(p1line), CLAY_TEXT_CONFIG({ .textColor = p1c, .fontSize = 16 }));
+		if (mode == MODE_MISSION && sel_phase == 0)
+			CLAY_TEXT(clay_str(mline), CLAY_TEXT_CONFIG({ .textColor = yellow, .fontSize = 16 }));
+
+		CLAY(CLAY_ID("CSpc"), { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } } }) {}
+		CLAY_TEXT(CLAY_STRING("D-pad: move    X: select    O: back"),
+		          CLAY_TEXT_CONFIG({ .textColor = dim, .fontSize = 14 }));
+	}
+	clay_render(Clay_EndLayout(0.0f));
+}
+
 int main(int argc, char *argv[])
 {
 	(void)argc; (void)argv;
 
-	printf("\n=== Ki Blast Arena (Phase 7 CPU AI) ===\n");
+	printf("\n=== Ki Blast Arena (Phase 9 menus & modes) ===\n");
 
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
 	init_screen();
@@ -940,15 +1216,27 @@ int main(int argc, char *argv[])
 	reset_match();
 
 	while (running) {
-		if (!update_game())
-			running = 0;
+		poll_pads();
+		if (quit_combo()) running = 0;          /* Select+Start on either pad */
+
+		switch (app_state) {
+		case APP_MENU:    update_menu();    break;
+		case APP_CHARSEL: update_charsel(); break;
+		case APP_FIGHT:   update_game();    break;
+		}
 
 		audio_update();         /* feed the MikMod mixer each frame */
 
 		begin_2d_frame();
-		draw_arena();
-		draw_hud();              /* custom: balance + ki bars, hints */
-		build_and_render_ui();   /* Clay: score pill + result/pause panels */
+		if (app_state == APP_FIGHT) {
+			draw_arena();
+			draw_hud();              /* custom: balance + ki bars, names */
+			build_and_render_ui();   /* Clay: score pill + result/pause panels */
+		} else {
+			draw_backdrop();
+			if (app_state == APP_MENU) render_menu();
+			else                       render_charsel();
+		}
 		tiny3d_Flip();
 
 		sysUtilCheckCallback();

@@ -170,12 +170,25 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: the full-length music makes the `.self` ~7.4 MB. The original's other SFX
   (teleport/kick/miss variants) and the AudioMixer volume buses aren't wired up.
 
-### Phase 9 — Game modes & flow ⬜
-- Start menu, character select (~30 characters), and the three modes: **Battle**,
-  **Tournament** (best-of-3 bracket), **Mission**. Pause menu. Port `StartOptions.cs`,
-  `SelectCharacters.cs` / `ChooseYourPlayer.cs`, `SelectMision.cs` / `MisionManager.cs`,
-  `Pause.cs` / `PauseMenu.cs`, `ResetGame.cs`.
-- **Exit criteria:** full menu → select → match → result → menu loop.
+### Phase 9 — Game modes & flow ✅
+- ✅ **App state machine** (`APP_MENU → APP_CHARSEL → APP_FIGHT → result → menu`) with a
+  **unified pad poll** (`poll_pads`) feeding every screen (retain-last + edge bits).
+- ✅ **Mode menu** (Clay): Battle / Tournament / Mission / Quit (`StartOptions.cs`).
+- ✅ **Character select** (Clay): the real **30-fighter roster** (names from the prefabs;
+  `levelPower` 1–10) in a 10×3 grid; pick P1, then P2 in Battle (`SelectCharacters.cs` /
+  `ChooseYourPlayer.cs`). Tournament picks a random opponent; Mission uses a fixed enemy
+  per mission (cycled with L1/R1, mirroring `SelectMision.cs` / `MisionManager.cs`).
+- ✅ **Per-fighter power**: each fighter's `levelPower` now drives melee/blast damage,
+  move speed, and CPU difficulty (so the chosen character actually matters).
+- ✅ **Modes**: Battle = first-to-1 (P2 human with pad 2, else CPU); Tournament =
+  first-to-3 vs random CPU; Mission = first-to-1 vs the mission's fixed CPU.
+- ✅ **Pause** (Clay): Start resumes, O quits to the menu (`Pause.cs` / `PauseMenu.cs`);
+  result → Start returns to the menu (`ResetGame.cs`). Full loop closes.
+- ⬜ **Exit criteria — full menu→select→match→result→menu loop on hardware:** confirm on
+  PS3/RPCS3 (builds green; on-console verification by playtest).
+- Note: some `levelPower` values are interpolated (binary prefabs); the original's
+  Tournament difficulty tiers, mission unlock gating, and per-character art aren't
+  reproduced (a single billboard style; arenas come in Phase 10).
 
 ### Phase 10 — Arenas & asset pipeline ⬜
 - Bring the 7 arenas over as backgrounds / scene configs; establish the conversion
