@@ -197,6 +197,28 @@ static void load_char_textures(void)
 		char_tex[i] = ya2d_loadPNGfromBuffer((void *)char_png[i].png, *char_png[i].size);
 }
 
+/* Arena backgrounds (bin2o from data/arenaN.jpg). */
+#define DECL_ARENA(n) extern const uint8_t arena##n##_jpg[]; extern const uint32_t arena##n##_jpg_size;
+DECL_ARENA(0) DECL_ARENA(1) DECL_ARENA(2) DECL_ARENA(3) DECL_ARENA(4) DECL_ARENA(5) DECL_ARENA(6)
+#define ARENA_N 7
+static const struct { const uint8_t *jpg; const uint32_t *size; const char *name; } arena_src[ARENA_N] = {
+	{ arena0_jpg, &arena0_jpg_size, "Namek" },
+	{ arena1_jpg, &arena1_jpg_size, "Cell Ring" },
+	{ arena2_jpg, &arena2_jpg_size, "Desert" },
+	{ arena3_jpg, &arena3_jpg_size, "Diablo Desert" },
+	{ arena4_jpg, &arena4_jpg_size, "Kamehouse" },
+	{ arena5_jpg, &arena5_jpg_size, "Planet Supreme Kaio" },
+	{ arena6_jpg, &arena6_jpg_size, "Torneo Mundial" },
+};
+static ya2d_Texture *arena_tex[ARENA_N];
+static int arena_sel = 0;
+
+static void load_arena_textures(void)
+{
+	for (int i = 0; i < ARENA_N; i++)
+		arena_tex[i] = ya2d_loadJPGfromBuffer((void *)arena_src[i].jpg, *arena_src[i].size);
+}
+
 /* Per-fighter strength (from the chosen character). */
 static float p1_power = DEFAULT_POWER, p2_power = DEFAULT_POWER;
 static int   p1_char = 0, p2_char = ROSTER_N - 1;
@@ -214,14 +236,14 @@ static int menu_sel = 0;         /* mode-menu cursor   */
 static int sel_cursor = 0;       /* character grid cursor */
 static int sel_phase = 0;        /* 0 = picking P1, 1 = picking P2 */
 
-/* Missions: a fixed enemy (and a flavour title) per mission. */
-typedef struct { const char *title; int enemy; } Mission;
+/* Missions: a fixed enemy + arena (and a flavour title) per mission. */
+typedef struct { const char *title; int enemy; int arena; } Mission;
 static const Mission missions[5] = {
-	{ "Saiyan Saga",   3 },   /* vs Vegeta Inicio   */
-	{ "Namek",         8 },   /* vs Freezer Forma 4 */
-	{ "Android/Cell",  14 },  /* vs Cell Perfecta   */
-	{ "Majin Buu",     20 },  /* vs Kid Buu         */
-	{ "Gods",          29 },  /* vs Whis            */
+	{ "Saiyan Saga",   3,  3 },   /* vs Vegeta Inicio   @ Diablo Desert */
+	{ "Namek",         8,  0 },   /* vs Freezer Forma 4 @ Namek         */
+	{ "Android/Cell",  14, 1 },   /* vs Cell Perfecta   @ Cell Ring     */
+	{ "Majin Buu",     20, 6 },   /* vs Kid Buu         @ Torneo Mundial*/
+	{ "Gods",          29, 5 },   /* vs Whis            @ Supreme Kaio   */
 };
 #define MISSION_N 5
 static int mission_sel = 0;
@@ -232,7 +254,8 @@ static int tour_tier = 1;           /* Tournament difficulty tier 1..3 */
 enum {
 	PB_UP = 1u, PB_DOWN = 2u, PB_LEFT = 4u, PB_RIGHT = 8u,
 	PB_CROSS = 16u, PB_CIRCLE = 32u, PB_SQUARE = 64u,
-	PB_START = 128u, PB_SELECT = 256u, PB_L1 = 512u, PB_R1 = 1024u
+	PB_START = 128u, PB_SELECT = 256u, PB_L1 = 512u, PB_R1 = 1024u,
+	PB_L2 = 2048u, PB_R2 = 4096u
 };
 static padData g_pd[2];      /* retained current pad state */
 static int     g_conn[2];
@@ -653,6 +676,8 @@ static void poll_pads(void)
 			if (p->BTN_SELECT) cur |= PB_SELECT;
 			if (p->BTN_L1)     cur |= PB_L1;
 			if (p->BTN_R1)     cur |= PB_R1;
+			if (p->BTN_L2)     cur |= PB_L2;
+			if (p->BTN_R2)     cur |= PB_R2;
 		}
 		g_pressed[i] = cur & ~prev[i];
 		prev[i] = cur;
@@ -710,11 +735,13 @@ static void update_menu(void)
 	if (e & PB_DOWN) menu_sel = (menu_sel + 1) % 4;
 	if (g_pressed[0] & PB_CROSS) {
 		switch (menu_sel) {
-		case 0: mode = MODE_BATTLE;     sel_phase = 0; app_state = APP_CHARSEL; break;
-		case 1: mode = MODE_TOURNAMENT; sel_phase = 0; app_state = APP_CHARSEL; break;
-		case 2: mode = MODE_MISSION;    sel_phase = 0; app_state = APP_CHARSEL; break;
-		case 3: running = 0; break;   /* Quit */
+		case 0: mode = MODE_BATTLE;     break;   /* arena is player-picked (L2/R2) */
+		case 1: mode = MODE_TOURNAMENT; arena_sel = 6; break;                 /* Torneo Mundial */
+		case 2: mode = MODE_MISSION;    arena_sel = missions[mission_sel].arena; break;
+		case 3: running = 0; return;   /* Quit */
 		}
+		sel_phase = 0;
+		app_state = APP_CHARSEL;
 	}
 }
 
@@ -726,9 +753,13 @@ static void update_charsel(void)
 	if (sel_phase == 0 && mode == MODE_MISSION) {
 		if (g_pressed[0] & PB_L1) mission_sel = (mission_sel + missions_unlocked - 1) % missions_unlocked;
 		if (g_pressed[0] & PB_R1) mission_sel = (mission_sel + 1) % missions_unlocked;
+		arena_sel = missions[mission_sel].arena;
 	} else if (sel_phase == 0 && mode == MODE_TOURNAMENT) {
 		if (g_pressed[0] & PB_L1) tour_tier = (tour_tier > 1) ? tour_tier - 1 : 3;
 		if (g_pressed[0] & PB_R1) tour_tier = (tour_tier < 3) ? tour_tier + 1 : 1;
+	} else if (sel_phase == 0 && mode == MODE_BATTLE) {
+		if (g_pressed[0] & PB_L2) arena_sel = (arena_sel + ARENA_N - 1) % ARENA_N;
+		if (g_pressed[0] & PB_R2) arena_sel = (arena_sel + 1) % ARENA_N;
 	}
 	if (e & PB_LEFT)  sel_cursor = (sel_cursor + ROSTER_N - 1) % ROSTER_N;
 	if (e & PB_RIGHT) sel_cursor = (sel_cursor + 1) % ROSTER_N;
@@ -960,8 +991,16 @@ static void draw_expls(void)
 	}
 }
 
+/* Full-screen arena background (drawn before the floor). */
+static void draw_background(int idx)
+{
+	if (idx >= 0 && idx < ARENA_N && arena_tex[idx])
+		ya2d_drawTextureEx(arena_tex[idx], 0.0f, 0.0f, 0.0f, SCREEN_WIDTH, SCREEN_HEIGHT);
+}
+
 static void draw_arena(void)
 {
+	draw_background(arena_sel);
 	floor_quad();
 	floor_grid();
 
@@ -1152,6 +1191,7 @@ static void build_and_render_ui(void)
 /* Arena floor backdrop for the menu / select screens. */
 static void draw_backdrop(void)
 {
+	draw_background(arena_sel);
 	floor_quad();
 	floor_grid();
 	if (app_state == APP_MENU) {
@@ -1206,7 +1246,7 @@ static void render_charsel(void)
 {
 	static char cellnames[ROSTER_N][3];
 	static int cellnames_ready = 0;
-	static char title[24], info[72], p1line[80], mline[128], tline[80];
+	static char title[24], info[72], p1line[80], mline[128], tline[80], aline[80];
 
 	if (!cellnames_ready) {
 		for (int i = 0; i < ROSTER_N; i++) snprintf(cellnames[i], 3, "%02d", i);
@@ -1226,6 +1266,8 @@ static void render_charsel(void)
 	snprintf(mline, sizeof mline, "Mission %d/%d (%d unlocked): %s   vs %s   (L1/R1)",
 	         mission_sel + 1, MISSION_N, missions_unlocked, ms->title, roster[ms->enemy].name);
 	snprintf(tline, sizeof tline, "Tournament  Tier %d/3   (L1/R1 change)", tour_tier);
+	snprintf(aline, sizeof aline, "Arena: %s%s", arena_src[arena_sel].name,
+	         mode == MODE_BATTLE ? "   (L2/R2)" : "");
 
 	/* Big character previews behind the grid: cursor (and the chosen P1 in phase 2). */
 	if (sel_phase == 0) {
@@ -1274,6 +1316,8 @@ static void render_charsel(void)
 			CLAY_TEXT(clay_str(mline), CLAY_TEXT_CONFIG({ .textColor = yellow, .fontSize = 16 }));
 		if (mode == MODE_TOURNAMENT && sel_phase == 0)
 			CLAY_TEXT(clay_str(tline), CLAY_TEXT_CONFIG({ .textColor = yellow, .fontSize = 16 }));
+		if (sel_phase == 0)
+			CLAY_TEXT(clay_str(aline), CLAY_TEXT_CONFIG({ .textColor = dim, .fontSize = 15 }));
 
 		CLAY(CLAY_ID("CSpc"), { .layout = { .sizing = { CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0) } } }) {}
 		CLAY_TEXT(CLAY_STRING("D-pad: move    X: select    O: back"),
@@ -1291,6 +1335,7 @@ int main(int argc, char *argv[])
 	sysUtilRegisterCallback(SYSUTIL_EVENT_SLOT0, sys_callback, NULL);
 	init_screen();
 	load_char_textures();    /* 30 character sprites (after ya2d_init) */
+	load_arena_textures();   /* 7 arena backgrounds */
 	ioPadInit(7);
 	camera_setup();
 	audio_init();            /* MikMod music + SFX (silent if it fails) */

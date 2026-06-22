@@ -197,11 +197,20 @@ What we are reproducing (from the Unity project `powerofpong`):
 - Note: some `levelPower` values are interpolated (binary prefabs). Arenas/backgrounds
   still come in Phase 10.
 
-### Phase 10 — Arenas & asset pipeline ⬜
-- Bring the 7 arenas over as backgrounds / scene configs; establish the conversion
-  pipeline from Unity assets into `data/` (embedded) and `pkgfiles/assets/` (PKG).
-- Decide character representation (sprite sheets vs exported meshes).
-- **Exit criteria:** multiple selectable arenas with their art.
+### Phase 10 — Arenas & asset pipeline ✅
+- ✅ The **7 arenas** (Namek, Cell Ring, Desert, Diablo Desert, Kamehouse, Planet Supreme
+  Kaio, Torneo Mundial) ship as the original background images, converted to 848×512 JPG
+  (`-ljpgdec` / `ya2d_loadJPGfromBuffer`) and embedded via `bin2o`. Drawn full-screen
+  behind the floor + fighters (and on the menu / select backdrops).
+- ✅ **Arena selection**: Battle picks the arena with L2/R2 in char-select; Tournament
+  forces Torneo Mundial; each Mission has its own arena. The name shows in the UI.
+- ✅ **Asset pipeline established**: Unity textures → ffmpeg/sips downscale → `data/`
+  (PNG sprites / JPG backgrounds) → `bin2o` extern symbols → `ya2d` textures, all loaded
+  defensively (a failed load just falls back, never crashes).
+- ⬜ **Exit criteria — multiple selectable arenas with their art, on hardware:** confirm
+  on PS3/RPCS3 (builds green; `.self` ~9.1 MB).
+- Note: backgrounds are flat 2D images (no 3D skybox/parallax); character representation
+  stays as 2D sprite billboards (the chosen pipeline).
 
 ### Phase 11 — Packaging & polish ⬜
 - `ICON0.PNG` / `PIC1.PNG`, `make pkg` for XMB install, performance pass, `docs/`.
