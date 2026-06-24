@@ -122,10 +122,18 @@ float vz = v_dot(d, f); if (vz < 0.05f) return 0;        /* behind camera */
 General principle: **when feedback loops are slow/expensive, choose the approach you can
 verify by reading, not by running.**
 
-### 3.3 No z-buffer in 2D mode → painter's algorithm
+### 3.3 Draw order = paint order (via the depth test), not "no z-buffer"
 
 Draw far-to-near. Sort objects by camera-forward depth (`dot(pos - eye, forward)`),
 draw the larger-depth one first. Fine for a handful of actors.
+
+> **Correction (verified by disassembling `libtiny3d` on the sister 2D port):**
+> `tiny3d_Project2D` is *not* z-less — it enables the depth test with func **`LEQUAL`**,
+> depth-write **on**, and clears depth to **far**. So overlapping quads compose in **draw
+> order for free** *as long as they all use one constant `z`* (a later draw at the same `z`
+> passes `≤` and overwrites). ⚠️ The trap: don't bias `z` per-object to "fix" ordering — a
+> later, *larger* `z` then **fails** `≤` and the object vanishes wherever it overlaps an
+> earlier one. Draw back-to-front at a single `z` and let LEQUAL do the rest.
 
 ### 3.4 Clamp the footprint edge, not the centre
 
