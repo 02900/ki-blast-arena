@@ -108,8 +108,8 @@ ki-blast-arena/
 
 Built against the libraries the toolchain image ships: **Tiny3D** (3D), **YA2D**
 (2D sprites), **FreeType** (TTF text), **MikMod** (audio), **libcurl**/**PolarSSL**,
-**Mini18n**, plus the PSL1GHT pad/audio/sysutil APIs. The Clay UI layout engine
-(`extern/clay-ps3`) will be added as a submodule for the HUD and menus.
+**Mini18n**, plus the PSL1GHT pad/audio/sysutil APIs. The **Clay** UI layout engine
+(`extern/clay-ps3`) renders the menus, character-select grid, and the in-fight HUD.
 
 ## Roadmap
 
