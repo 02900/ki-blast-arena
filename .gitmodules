@@ -1,3 +1,6 @@
 [submodule "extern/clay-ps3"]
 	path = extern/clay-ps3
 	url = ../clay-ps3.git
+[submodule ".claude/skills/ps3-homebrew"]
+	path = .claude/skills/ps3-homebrew
+	url = ../ps3-homebrew-skills.git

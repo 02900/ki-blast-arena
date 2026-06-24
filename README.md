@@ -96,6 +96,7 @@ ki-blast-arena/
 ├── data/                # Embedded assets (bin2o): character/arena art, audio
 ├── pkgfiles/            # Files bundled into the PKG (ICON0.PNG, assets/)
 ├── extern/              # External deps (Clay UI submodule)
+├── .claude/skills/      # Submodule: ps3-homebrew patterns, as Claude skills (ps3-homebrew-skills)
 ├── docs/api/            # Per-library API notes
 ├── scripts/             # Dockerized build.sh / deploy.sh wrappers
 ├── todo/                # → ROADMAP.md: the migration plan
@@ -118,8 +119,11 @@ The full, phase-by-phase migration plan is in **[todo/ROADMAP.md](todo/ROADMAP.m
 ## Patterns & gotchas
 
 Reusable conventions and traps hit while porting (PSL1GHT pad quirks, Tiny3D colour
-formats, deterministic camera, Unity-port tips) are in
-**[docs/PATTERNS.md](docs/PATTERNS.md)** — read it before adding input or rendering code.
+formats, deterministic camera, MikMod audio, Unity-port tips) now live in the shared
+**[`.claude/skills/ps3-homebrew/`](https://github.com/02900/ps3-homebrew-skills)** submodule —
+vendored once and used as Claude Code skills, so every port stays in sync. Run
+`git submodule update --init` to fetch it; read it before adding input or rendering code.
+(`docs/PATTERNS.md` is now just a pointer there.)
 
 ## Credits
 
